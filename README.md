@@ -1,2 +1,4 @@
 # GEP2
-A fully-automated quality control tool for parallel evaluation of genome assemblies
+### Genome Evaluation Pipeline (v2)
+
+This repo contains a much updated version of [GEP](https://git.imp.fu-berlin.de/begendiv/gep) that is currently in development.
