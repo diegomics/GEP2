@@ -19,18 +19,15 @@ Data is entered via a simple table, and configuration is managed through a tidy 
 
 ## How to Get and Set Up GEP2
 
-### 1) Get the Latest Release
+### 1) Get the latest version
 
-```bash
-git clone --depth=1 --branch=main https://github.com/diegomics/GEP2.git
-```
+GEP2 is adding features rapidly, so please download the latest [release](https://github.com/diegomics/GEP2/releases)
 
 ### 2) Create the GEP2 Conda Environment
 
-The environment contains Snakemake and other required packages:
+The environment contains Snakemake and other required packages. Enter the GEP folder and:
 
 ```bash
-cd GEP2
 conda env create -f install.yml
 ```
 
