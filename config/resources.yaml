@@ -1,0 +1,178 @@
+# Resource configuration for justATG pipeline
+# User limits are defined in control_panel.yaml (myCPU, myRAM, myRUN)
+
+# ============================================================================
+# EXPECTED FIELDS FOR RESOURCE CALCULATION
+# ============================================================================
+# Each rule in 'resources' section can use the following fields:
+#
+# CPU ALLOCATION:
+#   max_cpu: <int>
+#     - Maximum CPU cores the tool can effectively utilize
+#     - Script will allocate min(user_cpu, max_cpu)
+#
+# MEMORY ALLOCATION (use one approach):
+#   Option 1 - Static memory:
+#     mem_gb: <float>
+#       - Fixed memory allocation in GB
+#
+#   Option 2 - Dynamic memory (scales with input file size):
+#     base_mem_gb: <float>
+#       - Minimum/base memory requirement in GB
+#     mem_gb_per_uncompressed_gb: <float>
+#       - Additional memory per GB of uncompressed input data
+#       - Total = base_mem_gb + (uncompressed_size * mem_gb_per_uncompressed_gb)
+#
+# RUNTIME ALLOCATION (use one approach):
+#   Option 1 - Static runtime:
+#     runtime_min: <int>
+#       - Fixed runtime in minutes
+#
+#   Option 2 - Dynamic runtime (scales with input file size):
+#     base_runtime_min: <int>
+#       - Minimum/base runtime in minutes
+#     runtime_min_per_uncompressed_gb: <int>
+#       - Additional runtime per GB of uncompressed input data
+#       - Total = base_runtime_min + (uncompressed_size * runtime_min_per_uncompressed_gb)
+#
+# RETRY BEHAVIOR:
+#   - All resources scale by 1.5x for each retry attempt
+#   - Helps jobs succeed after initial resource-related failures
+#
+# CAUTION: Fields with different names will be ignored!
+# ============================================================================
+
+
+# Compression ratios to estimate uncompressed file sizes
+compression_ratios:
+  ".fastq.gz": 3.0   # pick a value that fits your RAM budget for this rule
+  ".fq.gz": 3.0
+  ".fa.gz": 3.5
+  ".fasta.gz": 3.5
+  ".fna.gz": 3.5
+  ".bam": 1.0        # already compressed; many tools stream/process as-is
+  ".cram": 1.0
+  ".gz": 3.2         # generic fallback for other gz files
+  ".bz2": 4.0
+  ".xz": 4.5
+  default: 1.0
+
+
+# Resource calculation rules for each tool
+resources:
+  # Download data
+  download_data:
+    max_cpu: 2
+    mem_gb: 4
+    runtime_min: 1080                       # 18h
+
+  # Assembly statistics tools
+  gfastats:
+    max_cpu: 12     
+    mem_gb_per_uncompressed_gb: 2.0
+    base_mem_gb: 4
+    runtime_min_per_uncompressed_gb: 15
+    base_runtime_min: 60
+
+  compleasm:
+    max_cpu: 16     
+    mem_gb_per_uncompressed_gb: 26.0
+    base_mem_gb: 16
+    runtime_min_per_uncompressed_gb: 120    # 2h
+    base_runtime_min: 240                   # 4h
+
+  # Read trimming tools
+  reads_qc:
+    max_cpu: 2
+    base_mem_gb: 12
+    mem_gb_per_uncompressed_gb: 0.15
+    base_runtime_min: 480
+    runtime_min_per_uncompressed_gb: 1
+  
+  correct_ont:
+    max_cpu: 24
+    mem_gb_per_uncompressed_gb: 8.0
+    base_mem_gb: 32
+    runtime_min_per_uncompressed_gb: 180    # 3h
+    base_runtime_min: 480                   # 8h
+
+  trim_pe:  
+    max_cpu: 8
+    mem_gb_per_uncompressed_gb: 0.1
+    base_mem_gb: 8
+    runtime_min_per_uncompressed_gb: 2
+    base_runtime_min: 240                   # 4h
+
+  filter_hifi:
+    max_cpu: 4
+    mem_gb_per_uncompressed_gb: 0.5
+    base_mem_gb: 8
+    runtime_min_per_uncompressed_gb: 10
+    base_runtime_min: 240                   # 4h
+
+
+  # Kmer tools
+  kmer_count:
+    max_cpu: 12
+    mem_gb_per_uncompressed_gb: 0.25        
+    base_mem_gb: 32
+    runtime_min_per_uncompressed_gb: 1
+    base_runtime_min: 480                   # 8h
+
+  merqury:
+    max_cpu: 12
+    mem_gb_per_uncompressed_gb: 0.2        
+    base_mem_gb: 48
+    runtime_min_per_uncompressed_gb: 2
+    base_runtime_min: 360                   # 6h
+
+  genomescope:
+    max_cpu: 1
+    mem_gb: 4
+    runtime_min: 60
+
+  # Read mapping tools
+  bwa_index:
+    max_cpu: 1
+    mem_gb_per_uncompressed_gb: 21
+    base_mem_gb: 12
+    runtime_min_per_uncompressed_gb: 60     # 1h
+    base_runtime_min: 120                   # 2h
+
+  bwa_mem:
+    max_cpu: 16 
+    mem_gb_per_uncompressed_gb: 0.5
+    base_mem_gb: 24
+    runtime_min_per_uncompressed_gb: 15
+    base_runtime_min: 180                   # 3h
+
+  minimap2:
+    max_cpu: 18
+    mem_gb_per_uncompressed_gb: 0.2
+    base_mem_gb: 32
+    runtime_min_per_uncompressed_gb: 30
+    base_runtime_min: 240                   # 4h
+
+  markdup:
+    max_cpu: 8
+    mem_gb_per_uncompressed_gb: 2.0 
+    base_mem_gb: 12        
+    runtime_min_per_uncompressed_gb: 30
+    base_runtime_min: 240                   # 4h
+
+
+  # Lightweight tools
+  samtools_index:
+    max_cpu: 2
+    mem_gb: 4
+    runtime_min: 2880                       # 48h
+
+  compress_reads:
+    max_cpu: 6
+    mem_gb: 3
+    runtime_min: 360                        # 6h
+
+  light_task:
+    max_cpu: 1
+    mem_gb: 1
+    runtime_min: 60

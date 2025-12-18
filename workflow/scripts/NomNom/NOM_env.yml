@@ -1,0 +1,14 @@
+name: NOM_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pandas
+  - numpy
+  - pyyaml
+  - openpyxl
+  - xlrd
+  - fsspec
+  - numbers-parser
+  - odfpy

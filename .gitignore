@@ -1,0 +1,38 @@
+# These are files that I can think should not be tracked..,.
+
+# --- Snakemake
+.snakemake/
+
+# --- OS stuff
+.DS_Store
+**/.DS_Store
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+.fseventsd
+.bash_history
+.lesshst
+*.goutputstream-*
+.directory
+.fuse_hidden*
+.nfs*
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# --- Cluster stuff
+slurm-*.out
+slurm-*.err
+*.o[0-9]*
+*.e[0-9]*
+
+# --- Python & co
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# --- Swap files
+*.swp
+*~
+

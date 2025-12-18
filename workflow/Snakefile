@@ -1,0 +1,1608 @@
+# GEP2 - Genome Evaluation Pipeline 2
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# IMPORTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+import os
+import sys
+import re
+import yaml
+import json
+import copy
+import glob
+import subprocess
+import urllib.request
+import urllib.parse
+from urllib.error import URLError, HTTPError
+from urllib.parse import urlparse, unquote
+from pathlib import Path
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONSTANTS & PATHS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+BASEDIR = Path(workflow.basedir)
+ROOT = BASEDIR.parent
+SCRIPTS_DIR = BASEDIR / "scripts"
+
+# Add scripts directory to path for custom modules
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+# Path to shared BUSCO lineages (reusable across runs)
+BUSCO_DB_DIR = os.path.join(ROOT, "busco_lineages")
+
+# Placeholder for missing input files (used by processing rules)
+_MISSING_IN = None  # Will be set after out_folder is defined
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# UTILITIES (pure functions, no dependencies on config)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def is_main_process():
+    """Check if we're the main Snakemake process (not a SLURM worker)"""
+    indicators = [
+        os.environ.get("SNAKEMAKE_JOBID"),
+        os.environ.get("SNAKEMAKE_SLURM_JOBID"),
+        os.environ.get("SLURM_JOB_ID"),
+    ]
+    return not any(indicators)
+
+
+def _as_bool(value):
+    """Convert config value to boolean, handling 'on'/'off' strings"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ('true', 'yes', 'on', '1')
+    return bool(value)
+
+
+def _mk_dirs(log_path):
+    """Create directories for log files"""
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+
+def _is_10x(read_type):
+    """Check if read type is 10x (needs barcode trimming)"""
+    return str(read_type).lower() == "10x"
+
+
+def normalize_read_type(read_type):
+    """
+    Normalize read type names to standard lowercase versions.
+    Returns lowercase standardized name, or original lowercased if no match.
+    """
+    if not read_type or read_type == "None":
+        return None
+    
+    rt = str(read_type).lower().strip()
+    
+    mappings = {
+        "hifi": ["hifi", "pacbio", "pb", "ccs", "pac-bio", "pac_bio", "hi-fi", "hi_fi"],
+        "illumina": ["illumina", "paired-end", "paired_end", "pe", "short_read", 
+                     "short_reads", "shortread", "shortreads", "short-read",
+                     "short-reads", "sr", "short", "paired"],
+        "10x": ["10x", "chromium", "10xgenomics", "10x_genomics", "linked-read",
+                "linked-reads", "linked_read", "linked_reads", "linkedread", "linkedreads"],
+        "ont": ["ont", "nanopore", "oxford", "oxford_nanopore", "minion", 
+                "promethion", "gridion", "nano"],
+        "hic": ["hic", "hi-c", "hi_c", "dovetail", "arima", "omni-c", "omnic"],
+    }
+    
+    for normalized, variants in mappings.items():
+        if rt in variants:
+            return normalized
+    
+    return rt
+
+
+def is_url(value: str) -> bool:
+    """Check if value is a URL"""
+    return isinstance(value, str) and (
+        value.startswith(('http://', 'https://', 'ftp://', 'www.'))
+    )
+
+
+def is_sra_accession(value: str) -> bool:
+    """Check if value is an SRA/ENA accession"""
+    if not isinstance(value, str):
+        return False
+    return bool(re.match(r'^[SED]RR\d+$', value))
+
+
+def is_ncbi_assembly_accession(value: str) -> bool:
+    """Check if value is an NCBI assembly accession"""
+    if not isinstance(value, str):
+        return False
+    return bool(re.match(r'^GC[AF]_\d{9}\.\d+$', value))
+
+
+def is_existing_path(value: str) -> bool:
+    """Check if value is an existing local path"""
+    if not isinstance(value, str) or is_url(value) or is_sra_accession(value):
+        return False
+    return Path(value).exists()
+
+
+def extract_filename_from_url(url: str) -> str:
+    """Extract filename from URL"""
+    parsed = urlparse(url)
+    filename = Path(unquote(parsed.path)).name
+    return filename if filename else "downloaded_file"
+
+
+def get_file_signature(filepath):
+    """
+    Get file signature (basename, size) for comparison.
+    Returns None if file doesn't exist yet (e.g., will be downloaded).
+    """
+    if not isinstance(filepath, (str, Path)):
+        return None
+    
+    filepath = Path(filepath)
+    
+    if not filepath.exists():
+        return (filepath.name, "pending")
+    
+    try:
+        return (filepath.name, filepath.stat().st_size)
+    except Exception as e:
+        print(f"[GEP2] Warning: Could not get signature for {filepath}: {e}")
+        return (filepath.name, "unknown")
+
+
+def get_assembly_basename(filepath):
+    """Extract assembly basename from filepath"""
+    basename = os.path.basename(filepath)
+    for ext in ['.fna.gz', '.fa.gz', '.fasta.gz', '.fna', '.fa', '.fasta', '.gz']:
+        if basename.endswith(ext):
+            basename = basename[:-len(ext)]
+    return basename
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONFIG LOADING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+IS_MAIN = is_main_process()
+
+# Import resource calculator
+from misc.resource_calc import ResourceCalculator, create_resource_functions
+
+# Load main control_panel yaml file
+CONFIG_PATH = ROOT / "config" / "control_panel.yaml"
+if not CONFIG_PATH.exists():
+    raise FileNotFoundError(f"Config file not found: {CONFIG_PATH}")
+configfile: str(CONFIG_PATH)
+
+# Validate required config keys
+required_keys = ["DATA_TABLE", "OUT_FOLDER"]
+missing = [k for k in required_keys if k not in config]
+if missing:
+    raise ValueError(f"Missing required config keys: {missing}")
+
+# Set up output folder
+out_folder = Path(config["OUT_FOLDER"]) / "GEP2_results"
+out_folder.mkdir(parents=True, exist_ok=True)
+
+# Now set the missing input placeholder
+_MISSING_IN = os.path.join(
+    config["OUT_FOLDER"], "GEP2_results", ".missing_input_placeholder_DO_NOT_CREATE"
+)
+
+# Load container configurations
+containers_path = BASEDIR / "envs" / "containers.yaml"
+if not containers_path.exists():
+    raise FileNotFoundError(f"Containers config not found: {containers_path}")
+
+with containers_path.open() as f:
+    data = yaml.safe_load(f) or {}
+
+CONTAINERS = data.get("containers", {})
+if not CONTAINERS:
+    raise ValueError(f"{containers_path} is missing a top-level 'containers:' mapping")
+
+# Load download manifest (shared by download and processing rules)
+manifest_path = os.path.join(config["OUT_FOLDER"], "GEP2_results", "download_manifest.json")
+DOWNLOAD_MANIFEST = []
+DOWNLOAD_MANIFEST_DICT = {}
+
+if os.path.exists(manifest_path):
+    with open(manifest_path) as f:
+        DOWNLOAD_MANIFEST = json.load(f)
+        # Create dict mapping destination -> entry for reads
+        for entry in DOWNLOAD_MANIFEST:
+            if entry["type"] == "reads":
+                DOWNLOAD_MANIFEST_DICT[entry["destination"]] = entry
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DATA TABLE HANDLING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def download_data_table(url: str, output_dir: Path) -> Path:
+    """Download data table from URL with special handling for Google Sheets"""
+    
+    print(f"[GEP2] DATA_TABLE is a URL: {url}")
+    
+    if 'docs.google.com/spreadsheets' in url:
+        match = re.search(r'/d/([a-zA-Z0-9-_]+)', url)
+        if match:
+            sheet_id = match.group(1)
+            url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv'
+            print(f"[GEP2] Detected Google Sheets, converting to export URL")
+            filename = f"data_table_{sheet_id}.csv"
+        else:
+            raise ValueError("Could not extract spreadsheet ID from Google Sheets URL")
+    else:
+        parsed = urllib.parse.urlparse(url)
+        filename = Path(parsed.path).name if parsed.path else "downloaded_data_table.csv"
+        
+        valid_exts = ['.csv', '.tsv', '.txt', '.xlsx', '.xls']
+        if not any(filename.endswith(ext) for ext in valid_exts):
+            filename += '.csv'
+    
+    output_path = output_dir / filename
+    
+    if output_path.exists():
+        print(f"[GEP2] Using cached data table: {output_path}")
+        return output_path
+    
+    print(f"[GEP2] Downloading data table...")
+    try:
+        urllib.request.urlretrieve(url, output_path)
+        print(f"[GEP2] ✅ Data table downloaded to: {output_path}")
+    except (URLError, HTTPError) as e:
+        raise ValueError(f"❌ Failed to download data table from {url}: {e}")
+    
+    return output_path
+
+
+# Process DATA_TABLE (URL or local path)
+data_table_value = config["DATA_TABLE"]
+
+if isinstance(data_table_value, str):
+    if data_table_value.startswith("www."):
+        print(f"[GEP2] URL starts with 'www.' - prepending 'https://'")
+        data_table_value = "https://" + data_table_value
+    
+    if data_table_value.startswith(("http://", "https://")):
+        input_table = download_data_table(data_table_value, out_folder)
+    else:
+        input_table = Path(data_table_value)
+        if not input_table.exists():
+            raise FileNotFoundError(f"Data table not found: {input_table}")
+else:
+    input_table = Path(str(data_table_value))
+    if not input_table.exists():
+        raise FileNotFoundError(f"Data table not found: {input_table}")
+
+yaml_output = out_folder / "data_config.yaml"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# YAML PROCESSING FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def normalize_assembly_files(yaml_data: dict) -> dict:
+    """
+    Normalize assembly files in YAML data.
+    Splits comma-separated paths into separate Path1, Path2, etc. entries.
+    This handles the case where NomNom stores multiple assemblies in a single Path1 value.
+    """
+    updated_yaml = copy.deepcopy(yaml_data)
+    
+    for sp_name, sp_data in yaml_data.get("sp_name", {}).items():
+        if not sp_data or "asm_id" not in sp_data:
+            continue
+            
+        for asm_id, asm_data in sp_data["asm_id"].items():
+            if not asm_data:
+                continue
+            
+            asm_files = asm_data.get("asm_files", {})
+            if not asm_files:
+                continue
+            
+            # Check if any value contains comma-separated paths
+            new_asm_files = {}
+            path_idx = 1
+            
+            for asm_key, asm_value in asm_files.items():
+                if not asm_value or asm_value == "None":
+                    continue
+                
+                # Split comma-separated paths
+                if isinstance(asm_value, str) and "," in asm_value:
+                    paths = [p.strip() for p in asm_value.split(",")]
+                    for path in paths:
+                        if path and path != "None":
+                            new_asm_files[f"Path{path_idx}"] = path
+                            path_idx += 1
+                else:
+                    new_asm_files[f"Path{path_idx}"] = asm_value
+                    path_idx += 1
+            
+            if new_asm_files:
+                updated_yaml["sp_name"][sp_name]["asm_id"][asm_id]["asm_files"] = new_asm_files
+    
+    return updated_yaml
+
+
+def normalize_yaml_read_types(yaml_data: dict) -> dict:
+    """
+    Normalize read_type keys in YAML data.
+    Converts read_type keys like "paired" to "illumina", "nanopore" to "ont", etc.
+    This ensures consistent naming throughout the pipeline.
+    """
+    updated_yaml = copy.deepcopy(yaml_data)
+    
+    for sp_name, sp_data in yaml_data.get("sp_name", {}).items():
+        if not sp_data or "asm_id" not in sp_data:
+            continue
+            
+        for asm_id, asm_data in sp_data["asm_id"].items():
+            if not asm_data:
+                continue
+            
+            read_type_dict = asm_data.get("read_type", {})
+            if not read_type_dict:
+                continue
+            
+            # Build new read_type dict with normalized keys
+            new_read_type_dict = {}
+            
+            for read_type, rt_data in read_type_dict.items():
+                if read_type == "None" or not rt_data:
+                    continue
+                
+                normalized_rt = normalize_read_type(read_type)
+                if normalized_rt:
+                    # If we already have this normalized type, merge the read_files
+                    if normalized_rt in new_read_type_dict:
+                        existing_files = new_read_type_dict[normalized_rt].get("read_files", {})
+                        new_files = rt_data.get("read_files", {})
+                        # Add new paths with incremented indices
+                        max_idx = max([int(k.replace("Path", "")) for k in existing_files.keys() if k.startswith("Path")], default=0)
+                        for path_key, path_value in new_files.items():
+                            max_idx += 1
+                            existing_files[f"Path{max_idx}"] = path_value
+                        new_read_type_dict[normalized_rt]["read_files"] = existing_files
+                    else:
+                        new_read_type_dict[normalized_rt] = rt_data
+            
+            if new_read_type_dict:
+                updated_yaml["sp_name"][sp_name]["asm_id"][asm_id]["read_type"] = new_read_type_dict
+    
+    return updated_yaml
+
+
+def process_yaml_for_downloads(yaml_data: dict, out_folder: Path) -> tuple:
+    """
+    Process YAML to detect downloads needed and update paths.
+    Note: Assembly files should already be normalized before calling this.
+    Returns: (updated_yaml, download_manifest)
+    """
+    updated_yaml = copy.deepcopy(yaml_data)
+    download_manifest = []
+    
+    # Track what we've already queued to avoid duplicates
+    queued_downloads = {}  # key: (type, source, species) -> destination
+    
+    for sp_name, sp_data in yaml_data.get("sp_name", {}).items():
+        if not sp_data or "asm_id" not in sp_data:
+            continue
+            
+        for asm_id, asm_data in sp_data["asm_id"].items():
+            if not asm_data:
+                continue
+            
+            # Process assembly files
+            asm_files = asm_data.get("asm_files", {})
+            if asm_files:
+                for asm_key, asm_file in asm_files.items():
+                    if not asm_file or asm_file == "None" or is_existing_path(asm_file):
+                        continue
+                    
+                    if is_url(asm_file):
+                        filename = extract_filename_from_url(asm_file)
+                        local_path = out_folder / "downloaded_data" / sp_name / "assemblies" / filename
+                        
+                        # Check if already queued
+                        dedup_key = ("assembly", asm_file, sp_name)
+                        if dedup_key not in queued_downloads:
+                            download_manifest.append({
+                                "type": "assembly",
+                                "source": asm_file,
+                                "destination": str(local_path),
+                                "method": "curl",
+                                "species": sp_name,
+                                "assembly": asm_id,
+                                "asm_key": asm_key
+                            })
+                            queued_downloads[dedup_key] = str(local_path)
+                            print(f"[GEP2] Assembly download queued: {asm_file}")
+                        else:
+                            local_path = Path(queued_downloads[dedup_key])
+                        
+                        updated_yaml["sp_name"][sp_name]["asm_id"][asm_id]["asm_files"][asm_key] = str(local_path)
+                
+                    elif is_ncbi_assembly_accession(asm_file):
+                        filename = f"{asm_file}_genomic.fna.gz"
+                        local_path = out_folder / "downloaded_data" / sp_name / "assemblies" / filename
+
+                        # Check if already queued
+                        dedup_key = ("assembly", asm_file, sp_name)
+                        if dedup_key not in queued_downloads:
+                            download_manifest.append({
+                                "type": "assembly",
+                                "source": asm_file,
+                                "destination": str(local_path),
+                                "method": "ncbi_assembly",
+                                "species": sp_name,
+                                "assembly": asm_id,
+                                "asm_key": asm_key
+                            })
+                            queued_downloads[dedup_key] = str(local_path)
+                            print(f"[GEP2] Assembly download queued: {asm_file}")
+                        else:
+                            local_path = Path(queued_downloads[dedup_key])
+                        
+                        updated_yaml["sp_name"][sp_name]["asm_id"][asm_id]["asm_files"][asm_key] = str(local_path)
+            
+            # Process reads
+            read_type_dict = asm_data.get("read_type", {})
+
+            for read_type, rt_data in read_type_dict.items():
+                if read_type == "None" or not rt_data:
+                    continue
+                
+                read_files = rt_data.get("read_files", {})
+                if not read_files:
+                    continue
+                
+                # Use normalized read type to check if paired-end
+                normalized_rt = normalize_read_type(read_type)
+                is_paired = normalized_rt in ["illumina", "10x"]
+                
+                for path_key, path_value in read_files.items():
+                    if not path_value or path_value == "None":
+                        continue
+                    
+                    if isinstance(path_value, str) and "," in path_value:
+                        paths = [p.strip() for p in path_value.split(",")]
+                    elif isinstance(path_value, list):
+                        paths = path_value
+                    else:
+                        paths = [path_value]
+                    
+                    new_paths = []
+                    
+                    for path in paths:
+                        if is_existing_path(path):
+                            new_paths.append(path)
+                            continue
+                        
+                        read_type_lower = normalize_read_type(read_type)
+                        base_dir = out_folder / "downloaded_data" / sp_name / "reads" / read_type_lower
+                        
+                        if is_url(path):
+                            filename = extract_filename_from_url(path)
+                            local_path = base_dir / filename
+                            
+                            # Check if already queued
+                            dedup_key = ("reads", path, sp_name, read_type_lower)
+                            if dedup_key not in queued_downloads:
+                                download_manifest.append({
+                                    "type": "reads",
+                                    "source": path,
+                                    "destination": str(local_path),
+                                    "method": "curl",
+                                    "species": sp_name,
+                                    "assembly": asm_id,
+                                    "read_type": read_type_lower
+                                })
+                                queued_downloads[dedup_key] = str(local_path)
+                                print(f"[GEP2] Reads download queued: {path}")
+                            else:
+                                local_path = Path(queued_downloads[dedup_key])
+                            
+                            new_paths.append(str(local_path))
+                            
+                        elif is_sra_accession(path):
+                            # Check if already queued
+                            dedup_key = ("reads", path, sp_name, read_type_lower)
+                            
+                            if is_paired:
+                                local_r1 = base_dir / f"{path}_1.fastq.gz"
+                                local_r2 = base_dir / f"{path}_2.fastq.gz"
+                                
+                                if dedup_key not in queued_downloads:
+                                    download_manifest.append({
+                                        "type": "reads",
+                                        "source": path,
+                                        "destination": str(base_dir / path),
+                                        "method": "enaDataGet",
+                                        "paired": True,
+                                        "species": sp_name,
+                                        "assembly": asm_id,
+                                        "read_type": read_type_lower
+                                    })
+                                    queued_downloads[dedup_key] = str(base_dir / path)
+                                    print(f"[GEP2] SRA paired reads download queued: {path}")
+                                
+                                new_paths.extend([str(local_r1), str(local_r2)])
+                            else:
+                                local_path = base_dir / f"{path}.fastq.gz"
+                                
+                                if dedup_key not in queued_downloads:
+                                    download_manifest.append({
+                                        "type": "reads",
+                                        "source": path,
+                                        "destination": str(local_path),
+                                        "method": "enaDataGet",
+                                        "paired": False,
+                                        "species": sp_name,
+                                        "assembly": asm_id,
+                                        "read_type": read_type_lower
+                                    })
+                                    queued_downloads[dedup_key] = str(local_path)
+                                    print(f"[GEP2] SRA reads download queued: {path}")
+                                
+                                new_paths.append(str(local_path))
+
+                    if new_paths:
+                        if len(new_paths) == 1:
+                            updated_yaml["sp_name"][sp_name]["asm_id"][asm_id]["read_type"][read_type]["read_files"][path_key] = new_paths[0]
+                        else:
+                            updated_yaml["sp_name"][sp_name]["asm_id"][asm_id]["read_type"][read_type]["read_files"][path_key] = ", ".join(new_paths)
+    
+    # Print dedup summary
+    total_sources = len(queued_downloads)
+    if total_sources > 0:
+        print(f"[GEP2] Download manifest: {total_sources} unique downloads queued")
+    
+    return updated_yaml, download_manifest
+
+
+def centralize_reads(yaml_data: dict, out_folder: Path) -> dict:
+    """
+    Centralize reads to species-level storage and update YAML paths.
+    This avoids redundant processing when the same reads are used with multiple assemblies.
+    """
+    updated_yaml = copy.deepcopy(yaml_data)
+    
+    print("[GEP2] Detecting duplicate read sets for centralization...")
+    
+    for sp_name, sp_data in yaml_data.get("sp_name", {}).items():
+        if not sp_data or "asm_id" not in sp_data:
+            continue
+        
+        read_sets = {}
+        read_counter = {}
+        
+        # First pass: identify unique read sets
+        for asm_id, asm_data in sp_data["asm_id"].items():
+            if not asm_data:
+                continue
+            
+            read_type_dict = asm_data.get("read_type", {})
+            
+            for read_type, rt_data in read_type_dict.items():
+                if read_type == "None" or not rt_data:
+                    continue
+                
+                read_files = rt_data.get("read_files", {})
+                if not read_files:
+                    continue
+                
+                all_paths = []
+                for path_key, path_value in read_files.items():
+                    if not path_value or path_value == "None":
+                        continue
+                    all_paths.append(path_value)
+                
+                if not all_paths:
+                    continue
+                
+                file_signatures = []
+                original_paths = []
+                
+                for path_value in all_paths:
+                    if isinstance(path_value, str) and "," in path_value:
+                        paths = [p.strip() for p in path_value.split(",")]
+                    elif isinstance(path_value, list):
+                        paths = path_value
+                    else:
+                        paths = [path_value]
+                    
+                    for p in paths:
+                        sig = get_file_signature(p)
+                        if sig:
+                            file_signatures.append(sig)
+                            original_paths.append(p)
+                
+                if not file_signatures:
+                    continue
+                
+                read_key = (read_type, tuple(sorted(file_signatures)))
+                
+                if read_key not in read_counter:
+                    read_counter[read_key] = 0
+                    read_sets[read_key] = {
+                        "read_type": read_type,
+                        "file_signatures": file_signatures,
+                        "original_paths": original_paths,
+                        "assemblies": []
+                    }
+                
+                read_counter[read_key] += 1
+                read_sets[read_key]["assemblies"].append(asm_id)
+        
+        # Second pass: centralize reads
+        read_set_index = {}
+        
+        for read_key, read_info in read_sets.items():
+            read_type, file_sigs = read_key
+            assemblies = read_info["assemblies"]
+            original_paths = read_info["original_paths"]
+            
+            # Use normalized read type consistently
+            read_type_normalized = normalize_read_type(read_type)
+            central_dir = out_folder / "data" / sp_name / "reads" / read_type_normalized
+            central_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Check if this is paired-end data
+            is_paired = read_type_normalized in ["illumina", "10x"]
+            
+            read_idx = len([k for k in read_set_index.values() if read_type_normalized in str(k)]) + 1
+            
+            centralized_paths = []
+            path_idx = 1  # Path index for this read set
+
+            for i, (original_path, file_sig) in enumerate(zip(original_paths, read_info["file_signatures"])):
+                original_path = str(original_path)
+                basename, size = file_sig
+                
+                clean_name = os.path.basename(basename)
+                clean_name = re.sub(r'^(hifi|ont|illumina|10x|hic|paired)_Path\d+_', '', clean_name, flags=re.IGNORECASE)
+                
+                for ext in ['.fq.gz', '.fastq.gz', '.fq', '.fastq', '.gz']:
+                    if clean_name.endswith(ext):
+                        clean_name = clean_name[:-len(ext)]
+                
+                # For paired-end reads, the downstream rules add _1/_2 suffixes,
+                # so we need to strip any existing _1/_2 or _R1/_R2 suffixes to avoid duplication
+                if is_paired:
+                    # Strip existing pair indicators - the rules will add _1/_2
+                    if clean_name.endswith('_1') or clean_name.endswith('_2'):
+                        clean_name = clean_name[:-2]  # Remove _1 or _2
+                    elif clean_name.endswith('_R1') or clean_name.endswith('_R2'):
+                        clean_name = clean_name[:-3]  # Remove _R1 or _R2
+                    
+                    # Add the correct suffix based on position (even=_1, odd=_2)
+                    pair_suffix = "_1" if i % 2 == 0 else "_2"
+                    new_filename = f"{read_type_normalized}_Path{path_idx}_{clean_name}{pair_suffix}.fq.gz"
+                else:
+                    new_filename = f"{read_type_normalized}_Path{path_idx}_{clean_name}.fq.gz"
+                
+                central_path = central_dir / new_filename
+                centralized_paths.append(str(central_path))
+                
+                # For paired reads, increment path_idx every 2 files (after _2)
+                # For single-end, increment after every file
+                if not is_paired or (i % 2 == 1):
+                    path_idx += 1
+
+            for asm_id in assemblies:
+                read_set_index[(asm_id, read_type)] = centralized_paths
+            
+            if read_counter[read_key] > 1:
+                size_str = ""
+                if original_paths and get_file_signature(original_paths[0]):
+                    sig = get_file_signature(original_paths[0])
+                    if sig[1] not in ["pending", "unknown"]:
+                        size_gb = sig[1] / (1024**3)
+                        size_str = f" ({size_gb:.2f} GB)"
+                
+                print(f"[GEP2] 🔗 Read set used by {read_counter[read_key]} assemblies in {sp_name}:")
+                print(f"       Type: {read_type}{size_str}")
+                print(f"       Assemblies: {', '.join(assemblies)}")
+                print(f"       Centralized to: {central_dir}")
+        
+        # Third pass: update YAML
+        for asm_id, asm_data in sp_data["asm_id"].items():
+            if not asm_data:
+                continue
+            
+            read_type_dict = asm_data.get("read_type", {})
+            
+            for read_type, rt_data in read_type_dict.items():
+                if read_type == "None" or not rt_data:
+                    continue
+                
+                read_files = rt_data.get("read_files", {})
+                if not read_files:
+                    continue
+                
+                key = (asm_id, read_type)
+                if key in read_set_index:
+                    centralized = read_set_index[key]
+                    read_type_normalized = normalize_read_type(read_type)
+                    is_paired = read_type_normalized in ["illumina", "10x"]
+                    
+                    new_read_files = {}
+                    
+                    if is_paired and len(centralized) >= 2:
+                        # Group paired reads: every 2 files = 1 Path entry
+                        path_idx = 1
+                        for i in range(0, len(centralized), 2):
+                            if i + 1 < len(centralized):
+                                # Pair _1 and _2
+                                new_read_files[f"Path{path_idx}"] = f"{centralized[i]}, {centralized[i+1]}"
+                            else:
+                                # Odd number of files, add the last one alone
+                                new_read_files[f"Path{path_idx}"] = centralized[i]
+                            path_idx += 1
+                    else:
+                        # Single-end or single file: one path per file
+                        for idx, path in enumerate(centralized, 1):
+                            new_read_files[f"Path{idx}"] = path
+                    
+                    updated_yaml["sp_name"][sp_name]["asm_id"][asm_id]["read_type"][read_type]["read_files"] = new_read_files
+    
+    print("[GEP2] Read centralization complete")
+    return updated_yaml
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LOAD SAMPLES CONFIG
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def load_samples_config():
+    """Safely load the samples configuration"""
+    
+    need_full_processing = True
+    config_data = None
+    
+    if yaml_output.exists():
+        yaml_mtime = yaml_output.stat().st_mtime
+        csv_mtime = input_table.stat().st_mtime
+        
+        if yaml_mtime > csv_mtime:
+            try:
+                with yaml_output.open() as f:
+                    config_data = yaml.safe_load(f)
+                if config_data and "sp_name" in config_data:
+                    # Check if this config has already been normalized
+                    # (normalized configs have "illumina" instead of "paired", etc.)
+                    # For now, always re-normalize to ensure consistency
+                    need_full_processing = False
+            except:
+                pass
+    
+    if not IS_MAIN:
+        if yaml_output.exists():
+            with yaml_output.open() as f:
+                config_data = yaml.safe_load(f)
+            # Even for workers, apply normalization to ensure consistency
+            config_data = normalize_assembly_files(config_data)
+            config_data = normalize_yaml_read_types(config_data)
+            return config_data
+        else:
+            raise RuntimeError("YAML config not found and cannot generate from worker process")
+    
+    if need_full_processing or config_data is None:
+        print("(U ᵔﻌᵔ)っ  NomNom is handling the data table...")
+        result = subprocess.run(
+            ["python", 
+             str(SCRIPTS_DIR / "NomNom" / "NomNom.py"),
+             "-a", 
+             str(SCRIPTS_DIR / "GEP2_table.attributes"),
+             "-o", 
+             str(yaml_output),
+             "--discover-paths", 
+             str(input_table)],
+            capture_output=True, 
+            text=True
+        )
+        if result.returncode != 0:
+            print("(U ಥ ﻌ ಥ)  Error generating YAML configuration:")
+            print(result.stdout if result.stdout else "")
+            print(result.stderr if result.stderr else "")
+            sys.exit(1)
+
+        with yaml_output.open() as f:
+            config_data = yaml.safe_load(f)
+        
+        if not config_data or "sp_name" not in config_data:
+            print(f"❌ Error: Invalid YAML structure in {yaml_output}")
+            sys.exit(1)
+    
+    # Always apply normalization
+    print("[GEP2] Normalizing assembly file paths...")
+    config_data = normalize_assembly_files(config_data)
+
+    print("[GEP2] Scanning for URLs and accessions...")
+    updated_yaml, download_manifest = process_yaml_for_downloads(config_data, out_folder)
+    
+    if download_manifest:
+        manifest_path = out_folder / "download_manifest.json"
+        with manifest_path.open('w') as f:
+            json.dump(download_manifest, f, indent=2)
+        print(f"[GEP2] Download manifest created: {manifest_path}")
+        print(f"[GEP2] Total downloads queued: {len(download_manifest)}")
+    else:
+        print("[GEP2] No downloads needed - all data is local")
+    
+    # Normalize read type keys (e.g., "paired" -> "illumina")
+    print("[GEP2] Normalizing read type names...")
+    updated_yaml = normalize_yaml_read_types(updated_yaml)
+    
+    updated_yaml = centralize_reads(updated_yaml, out_folder)
+    
+    with yaml_output.open('w') as f:
+        yaml.dump(updated_yaml, f, default_flow_style=False, sort_keys=False)
+    print(f"[GEP2] YAML updated with centralized paths")
+    
+    return updated_yaml
+
+
+if IS_MAIN:
+    print(f"(∪≖ﻌ≖∪)  NomNom is handling the data table...")
+
+samples_config = load_samples_config()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEMP DIR & SHELL PREFIX
+# ═══════════════════════════════════════════════════════════════════════════════
+
+OUT_TMP = os.path.join(config["OUT_FOLDER"], "tmp")
+os.makedirs(OUT_TMP, exist_ok=True)
+
+shell.prefix(
+    f"set -euo pipefail; "
+    f"export TMPDIR='{OUT_TMP}'; "
+    f"export GEP2_TMP='{OUT_TMP}'; "
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BANNER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if IS_MAIN:
+    banner = r"""
+         ____/\/\/\/\/\______/\/\/\/\/\/\______/\/\/\/\/\________/\/\/\/\/\____
+        __/\/\______________/\/\______________/\/\____/\/\______________/\/\__ 
+       __/\/\__/\/\/\______/\/\/\/\/\________/\/\/\/\/\__________/\/\/\/\____  
+      __/\/\____/\/\______/\/\______________/\/\______________/\/\__________   
+     ____/\/\/\/\/\______/\/\/\/\/\/\______/\/\______________/\/\/\/\/\/\__    
+    ______________________________________________________________________   
+    """
+    print(banner, flush=True)
+    print("Genome Evaluation Pipeline 2", flush=True)
+    print("v.0.1.0", flush=True)
+    print(f"Configuration: {CONFIG_PATH}", flush=True)
+    print(f"Output folder: {out_folder}", flush=True)
+    print("Pipeline starting NOW!", flush=True)
+    print("=" * 60, flush=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RESOURCE CALCULATOR
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if IS_MAIN:
+    try:
+        calculator = ResourceCalculator("config/resources.yaml", config)
+        cpu_func, mem_func, time_func = create_resource_functions(calculator)
+        print("✅ Resource calculator initialized successfully")
+        print(f"   Max CPU: {calculator.user_cpu}, Max RAM: {calculator.user_ram}GB, Max Time: {calculator.user_runtime}h")
+    except Exception as e:
+        print(f"❌ Error initializing resource calculator: {e}")
+        exit(1)
+else:
+    try:
+        calculator = ResourceCalculator("config/resources.yaml", config)
+        cpu_func, mem_func, time_func = create_resource_functions(calculator)
+    except Exception as e:
+        cpu_func = lambda x: 4
+        mem_func = lambda x: 8000
+        time_func = lambda x: 60
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HELPERS (functions that depend on samples_config)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# HELPERS - Assembly Functions
+# ───────────────────────────────────────────────────────────────────────────────
+
+def get_assembly_files(species, assembly):
+    """Get all assembly files for a given species/assembly"""
+    try:
+        asm_data = samples_config["sp_name"][species]["asm_id"][assembly]
+        asm_files = asm_data.get("asm_files", {})
+        return {k: v for k, v in asm_files.items() if v and v != "None"}
+    except (KeyError, TypeError, AttributeError):
+        return {}
+
+
+def get_assembly_input(wildcards):
+    """Get the assembly file path for a given species/assembly/basename"""
+    species = wildcards.species
+    assembly = wildcards.assembly
+    asm_basename = wildcards.asm_basename
+    
+    asm_files = get_assembly_files(species, assembly)
+    
+    for asm_key, asm_path in asm_files.items():
+        if get_assembly_basename(asm_path) == asm_basename:
+            return asm_path
+    
+    raise ValueError(f"Could not find assembly file for {species}/{assembly}/{asm_basename}")
+
+
+# HELPERS - Read Type Functions
+# ───────────────────────────────────────────────────────────────────────────────
+
+def get_normalized_read_types(species):
+    """Get all normalized read types available for a species"""
+    normalized = set()
+    try:
+        sp_data = samples_config["sp_name"][species]
+        for asm_id, asm_data in sp_data["asm_id"].items():
+            read_type_dict = asm_data.get("read_type", {})
+            for rt in read_type_dict.keys():
+                norm_rt = normalize_read_type(rt)
+                if norm_rt:
+                    normalized.add(norm_rt)
+    except (KeyError, TypeError, AttributeError):
+        pass
+    return normalized
+
+
+def get_original_read_type_key(species, normalized_type):
+    """Given a normalized read type, find the original key in the YAML."""
+    try:
+        sp_data = samples_config["sp_name"][species]
+        for asm_id, asm_data in sp_data["asm_id"].items():
+            read_type_dict = asm_data.get("read_type", {})
+            for rt_key in read_type_dict.keys():
+                if normalize_read_type(rt_key) == normalized_type:
+                    return rt_key
+    except (KeyError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def _parse_tech_priority():
+    """Parse TECH_PRIO config into ordered list"""
+    prio_str = config.get("TECH_PRIO", "illumina>hifi>ont>hic")
+    return [t.strip().lower() for t in prio_str.split(">")]
+
+
+def get_priority_read_type(species):
+    """Get the highest priority read type available for a species (normalized)"""
+    priority_order = _parse_tech_priority()
+    available_types = get_normalized_read_types(species)
+    
+    for prio_type in priority_order:
+        if prio_type in available_types:
+            return prio_type
+    
+    return list(available_types)[0] if available_types else None
+
+
+def get_kmer_length(read_type):
+    """Get k-mer length based on config and read type"""
+    kmer_len = config.get("KMER_LEN", 31)
+    
+    if str(kmer_len).lower() == "auto":
+        if read_type.lower() in ["illumina", "10x"]:
+            return 21
+        else:
+            return 31
+    
+    return int(kmer_len)
+
+
+def _species_has_reads(species):
+    """Check if a species has any reads available"""
+    return get_priority_read_type(species) is not None
+
+
+def _assembly_has_reads(species, asm_id):
+    """Check if an assembly has reads available. Returns the read_type if available."""
+    try:
+        asm_data = samples_config["sp_name"][species]["asm_id"][asm_id]
+        read_type_dict = asm_data.get("read_type", {})
+        
+        for read_type, rt_data in read_type_dict.items():
+            if read_type and read_type != "None" and rt_data:
+                read_files = rt_data.get("read_files", {})
+                has_files = any(v and v != "None" for v in read_files.values())
+                if has_files:
+                    return read_type
+        
+        return None
+    except (KeyError, TypeError, AttributeError):
+        return None
+
+
+# HELPERS - Centralized Reads Functions
+# ───────────────────────────────────────────────────────────────────────────────
+
+def _get_centralized_reads_dict(species, read_type):
+    """Get centralized read files dictionary for a species/read_type.
+    Collects unique reads across ALL assemblies for this species.
+    """
+    try:
+        sp_data = samples_config["sp_name"][species]
+        normalized_rt = normalize_read_type(read_type)
+        
+        # Collect all unique read files across all assemblies
+        all_reads = {}
+        seen_paths = set()
+        
+        for asm_id, asm_data in sp_data["asm_id"].items():
+            read_type_dict = asm_data.get("read_type", {})
+            
+            for rt_key in read_type_dict.keys():
+                if normalize_read_type(rt_key) == normalized_rt:
+                    rt_data = read_type_dict[rt_key]
+                    read_files = rt_data.get("read_files", {})
+                    
+                    for k, v in read_files.items():
+                        if v and v != "None" and k.startswith("Path"):
+                            # Deduplicate by path value
+                            if v not in seen_paths:
+                                seen_paths.add(v)
+                                new_idx = len(all_reads) + 1
+                                all_reads[f"Path{new_idx}"] = v
+        
+        return all_reads
+    except (KeyError, TypeError, AttributeError):
+        return {}
+
+
+def _enumerate_centralized_groups(species, read_type):
+    """Generate read groups for centralized location"""
+    reads_dict = _get_centralized_reads_dict(species, read_type)
+    
+    if not reads_dict:
+        return
+    
+    read_type_lower = read_type.lower() 
+    is_pe = read_type_lower in ["illumina", "10x"]
+    
+    for i, key in enumerate(sorted(reads_dict.keys()), 1):
+        val = reads_dict[key]
+        
+        if isinstance(val, str) and "," in val:
+            paths = [p.strip() for p in val.split(",")]
+        elif isinstance(val, list):
+            paths = val
+        else:
+            paths = [val]
+        
+        if is_pe and len(paths) >= 2:
+            r1, r2 = paths[0], paths[1]
+            base = os.path.basename(r1).replace("_set1", "").replace("_set2", "")
+            base = base.replace("_1", "").replace("_2", "").replace(".fq.gz", "").replace(".fastq.gz", "")
+            base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', base, flags=re.IGNORECASE)
+            
+            yield {
+                "idx": i,
+                "rt": read_type_lower,
+                "kind": "pe",
+                "r1": r1,
+                "r2": r2,
+                "base": base
+            }
+        else:
+            r = paths[0]
+            base = os.path.basename(r).replace("_set1", "").replace("_set2", "")
+            base = base.replace(".fq.gz", "").replace(".fastq.gz", "")
+            base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', base, flags=re.IGNORECASE)
+            
+            yield {
+                "idx": i,
+                "rt": read_type_lower,
+                "kind": "long",
+                "r": r,
+                "base": base
+            }
+
+
+def _pick_centralized_group(w):
+    """Pick the read group based on wildcards for centralized structure"""
+    for grp in _enumerate_centralized_groups(w.species, w.read_type):
+        if str(grp["idx"]) == str(w.idx):
+            return grp
+    
+    raise ValueError(f"Could not find group Path{w.idx} for {w.species}/{w.read_type}")
+
+
+def get_original_read_path(species, read_type, filename):
+    """Find the original path for a read file before centralization."""
+    read_type_lower = read_type.lower()
+    
+    try:
+        sp_data = samples_config["sp_name"][species]
+        
+        for asm_id, asm_data in sp_data["asm_id"].items():
+            read_files = asm_data.get("read_files", {})
+            
+            for path_key, path_value in read_files.items():
+                if not path_value or path_value == "None":
+                    continue
+                
+                if isinstance(path_value, str):
+                    if "," in path_value:
+                        paths = [p.strip() for p in path_value.split(",")]
+                    else:
+                        paths = [path_value]
+                elif isinstance(path_value, list):
+                    paths = path_value
+                else:
+                    paths = [str(path_value)]
+                
+                for path in paths:
+                    if os.path.basename(path) == filename or path.endswith(f"/{filename}"):
+                        return path
+        
+        downloaded_path = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "downloaded_data",
+            species, "*", "reads", read_type_lower, filename
+        )
+        
+        matches = glob.glob(downloaded_path)
+        if matches:
+            return matches[0]
+        
+        return os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data",
+            species, "reads", read_type_lower, filename
+        )
+        
+    except (KeyError, TypeError, AttributeError):
+        return os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data",
+            species, "reads", read_type_lower, filename
+        )
+
+
+def get_priority_read_type_for_assembly(species, asm_id):
+    """Get the highest priority read type for a specific assembly."""
+    try:
+        asm_data = samples_config["sp_name"][species]["asm_id"][asm_id]
+        read_type_dict = asm_data.get("read_type", {})
+        
+        priority_order = _parse_tech_priority()
+        available_types = set()
+        
+        for read_type, rt_data in read_type_dict.items():
+            if read_type and read_type != "None" and rt_data:
+                read_files = rt_data.get("read_files", {})
+                has_files = any(v and v != "None" for v in read_files.values())
+                if has_files:
+                    available_types.add(normalize_read_type(read_type))
+        
+        for prio_type in priority_order:
+            if prio_type in available_types:
+                return prio_type
+        
+        return list(available_types)[0] if available_types else None
+    except (KeyError, TypeError, AttributeError):
+        return None
+
+
+def _get_unique_reads_for_species(species, read_type):
+    """Get unique read bases for a species and read type (for per-read kmer DBs)."""
+    read_type_lower = normalize_read_type(read_type)
+    unique_bases = set()
+    
+    try:
+        sp_data = samples_config["sp_name"][species]
+        
+        for asm_id, asm_data in sp_data["asm_id"].items():
+            read_type_dict = asm_data.get("read_type", {})
+            
+            for rt_key, rt_data in read_type_dict.items():
+                if normalize_read_type(rt_key) != read_type_lower:
+                    continue
+                
+                read_files = rt_data.get("read_files", {})
+                
+                for path_key, path_value in read_files.items():
+                    if not path_value or path_value == "None":
+                        continue
+                    
+                    # Handle comma-separated paths
+                    if isinstance(path_value, str) and "," in path_value:
+                        paths = [p.strip() for p in path_value.split(",")]
+                    else:
+                        paths = [path_value]
+                    
+                    for p in paths:
+                        basename = os.path.basename(p)
+                        base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', basename, flags=re.IGNORECASE)
+                        base = base.replace(".fq.gz", "").replace(".fastq.gz", "")
+                        base = base.replace("_1", "").replace("_2", "")
+                        base = base.replace("_filtered", "").replace("_corrected", "").replace("_trimmed", "")
+                        unique_bases.add(base)
+        
+        return unique_bases
+    except (KeyError, TypeError, AttributeError):
+        return set()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COLLECTORS (functions that gather expected outputs)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# COLLECTORS - Assembly Stats
+# ───────────────────────────────────────────────────────────────────────────────
+
+def get_asm_stats_results():
+    """Get expected assembly stats outputs, respecting RUN_COMPL flag"""
+    expected_files = []
+    
+    if not samples_config or "sp_name" not in samples_config:
+        return expected_files
+    
+    run_compl = _as_bool(config.get("RUN_COMPL", True))
+    
+    for species, species_data in samples_config["sp_name"].items():
+        if not species_data or "asm_id" not in species_data:
+            continue
+            
+        for assembly, assembly_data in species_data["asm_id"].items():
+            if not assembly_data:
+                continue
+            
+            asm_files = get_assembly_files(species, assembly)
+            
+            for asm_key, asm_path in asm_files.items():
+                asm_basename = get_assembly_basename(asm_path)
+                base_path = os.path.join(out_folder, species, assembly)
+                
+                expected_files.append(
+                    os.path.join(base_path, "gfastats", f"{asm_basename}_stats.txt")
+                )
+                
+                if run_compl:
+                    expected_files.extend([
+                        os.path.join(base_path, "compleasm", asm_basename, f"{asm_basename}_summary.txt"),
+                        os.path.join(base_path, "compleasm", asm_basename, f"{asm_basename}_results.tar.gz")
+                    ])
+    
+    return expected_files
+
+
+# COLLECTORS - Read Processing
+# ───────────────────────────────────────────────────────────────────────────────
+
+def get_read_processing_results():
+    """Get expected read processing outputs."""
+    expected_files = []
+    
+    if not _as_bool(config.get("READS_PROC", True)):
+        return expected_files
+    
+    if not samples_config or "sp_name" not in samples_config:
+        return expected_files
+    
+    seen_combinations = set()
+    
+    for species, species_data in samples_config["sp_name"].items():
+        if not species_data or "asm_id" not in species_data:
+            continue
+
+        for asm_id, asm_data in species_data["asm_id"].items():
+            if not asm_data:
+                continue
+            
+            read_type_dict = asm_data.get("read_type", {})
+            
+            for read_type, rt_data in read_type_dict.items():
+                if read_type == "None" or not rt_data:
+                    continue
+                
+                read_files = rt_data.get("read_files", {})
+                has_files = any(v and v != "None" for v in read_files.values())
+                if not has_files:
+                    continue
+            
+                read_type_normalized = normalize_read_type(read_type)
+                combo_key = (species, read_type_normalized)
+                
+                if combo_key not in seen_combinations:
+                    seen_combinations.add(combo_key)
+                    
+                    expected_files.append(os.path.join(
+                        config["OUT_FOLDER"], "GEP2_results", "data", species,
+                        "reads", read_type_normalized, "processed", "reports",
+                        "multiqc_report.html"
+                    ))
+
+                    if IS_MAIN:
+                        print(f"[GEP2] Read processing for {species}/{read_type_normalized}")
+    
+    return expected_files
+
+
+# COLLECTORS - K-mer Analysis
+# ───────────────────────────────────────────────────────────────────────────────
+
+def get_kmer_stats_results():
+    """Get expected k-mer analysis outputs (per-read DBs and assembly-specific merged DBs)."""
+    expected_files = []
+    
+    if not _as_bool(config.get("KMER_STATS", True)):
+        return expected_files
+    
+    if not samples_config or "sp_name" not in samples_config:
+        return expected_files
+    
+    # Track which per-read k-mer DBs we need (deduplicated)
+    per_read_dbs = {}  # (species, read_type, base) -> kmer_len
+    
+    for species, species_data in samples_config["sp_name"].items():
+        if not species_data or "asm_id" not in species_data:
+            continue
+        
+        for asm_id, asm_data in species_data["asm_id"].items():
+            if not asm_data:
+                continue
+            
+            asm_files = get_assembly_files(species, asm_id)
+            if not asm_files:
+                continue
+            
+            # Get priority read type for this assembly
+            read_type = get_priority_read_type_for_assembly(species, asm_id)
+            
+            if not read_type:
+                if IS_MAIN:
+                    print(f"[GEP2] No reads for {species}/{asm_id}, skipping k-mer analysis")
+                continue
+            
+            kmer_len = get_kmer_length(read_type)
+            read_type_lower = read_type.lower()
+            
+            # Collect per-read DBs needed for this assembly
+            reads_for_asm = _get_reads_for_assembly(species, asm_id)
+            
+            for r in reads_for_asm:
+                key = (species, r["read_type"], r["base"])
+                if key not in per_read_dbs:
+                    per_read_dbs[key] = kmer_len
+            
+            # Assembly-specific k-mer DB and histogram
+            asm_kmer_dir = os.path.join(
+                config["OUT_FOLDER"], "GEP2_results", species, asm_id, f"k{kmer_len}"
+            )
+            
+            expected_files.extend([
+                os.path.join(asm_kmer_dir, f"{asm_id}.meryl"),
+                os.path.join(asm_kmer_dir, f"{asm_id}.hist")
+            ])
+            
+            # Assembly-specific GenomeScope2
+            gs_dir = os.path.join(asm_kmer_dir, "genomescope2")
+            
+            expected_files.extend([
+                os.path.join(gs_dir, f"{asm_id}_summary.txt"),
+                os.path.join(gs_dir, f"{asm_id}_model.txt"),
+                os.path.join(gs_dir, f"{asm_id}_linear_plot.png"),
+            ])
+            
+            if IS_MAIN:
+                print(f"[GEP2] K-mer analysis for {species}/{asm_id}: using {read_type} reads (k={kmer_len})")
+            
+            # Merqury outputs
+            asm_count = len([v for v in asm_files.values() if v and v != "None"])
+            mode = "diploid" if asm_count == 2 else "haploid"
+            
+            merqury_dir = os.path.join(
+                config["OUT_FOLDER"], "GEP2_results", species, asm_id, "merqury"
+            )
+            
+            expected_files.extend([
+                os.path.join(merqury_dir, f"{asm_id}.qv"),
+                os.path.join(merqury_dir, f"{asm_id}.completeness.stats")
+            ])
+            
+            if IS_MAIN:
+                print(f"[GEP2] Merqury for {species}/{asm_id}: {mode} mode ({asm_count} asm files)")
+    
+    # Add per-read k-mer DB outputs (deduplicated)
+    for (species, read_type, base), kmer_len in per_read_dbs.items():
+        db_path = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", species,
+            "reads", read_type, f"kmer_db_k{kmer_len}", f"{base}.meryl"
+        )
+        expected_files.append(db_path)
+    
+    return expected_files
+
+
+def _get_reads_for_assembly(species, asm_id):
+    """Get the read files assigned to a specific assembly.
+    
+    DATA_PRIORITY serves two purposes:
+    1. When MERGE_TECH is off: returns only reads from the highest priority technology
+    2. When MERGE_TECH is on: returns reads from all technologies LISTED in DATA_PRIORITY
+       (technologies not in the list are excluded)
+    """
+    try:
+        sp_data = samples_config["sp_name"][species]
+        asm_data = sp_data["asm_id"].get(asm_id, {})
+        read_type_dict = asm_data.get("read_type", {})
+        
+        merge_tech = _as_bool(config.get("MERGE_TECH", False))
+        priority_order = _parse_tech_priority()  # e.g., ["illumina", "hifi", "ont"]
+        
+        # Determine which read types to include
+        if merge_tech:
+            # Include all read types that are in the priority list
+            allowed_read_types = set(priority_order)
+        else:
+            # Only include the highest priority read type
+            priority_rt = get_priority_read_type_for_assembly(species, asm_id)
+            if not priority_rt:
+                return []
+            allowed_read_types = {priority_rt}
+        
+        reads_info = []
+        for rt_key, rt_data in read_type_dict.items():
+            read_type = normalize_read_type(rt_key)
+            
+            # Skip if not in allowed types
+            if read_type not in allowed_read_types:
+                continue
+            
+            read_files = rt_data.get("read_files", {})
+            
+            for path_key, path_value in sorted(read_files.items()):
+                if not path_value or path_value == "None":
+                    continue
+                
+                # Handle comma-separated paths (paired-end)
+                if isinstance(path_value, str) and "," in path_value:
+                    paths = [p.strip() for p in path_value.split(",")]
+                else:
+                    paths = [path_value]
+                
+                for p in paths:
+                    basename = os.path.basename(p)
+                    base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', basename, flags=re.IGNORECASE)
+                    base = base.replace(".fq.gz", "").replace(".fastq.gz", "")
+                    base = base.replace("_1", "").replace("_2", "")
+                    base = base.replace("_filtered", "").replace("_corrected", "").replace("_trimmed", "")
+                    
+                    reads_info.append({
+                        "read_type": read_type,
+                        "base": base,
+                        "path": p
+                    })
+        
+        # Deduplicate by (read_type, base)
+        seen = set()
+        unique_reads = []
+        for r in reads_info:
+            key = (r["read_type"], r["base"])
+            if key not in seen:
+                seen.add(key)
+                unique_reads.append(r)
+        
+        return unique_reads
+    except (KeyError, TypeError, AttributeError):
+        return []
+
+
+# COLLECTORS - Reports
+# ───────────────────────────────────────────────────────────────────────────────
+
+def get_report_results():
+    """Get expected report outputs for all assemblies."""
+    expected_files = []
+    
+    if not samples_config or "sp_name" not in samples_config:
+        return expected_files
+    
+    for species, species_data in samples_config["sp_name"].items():
+        if not species_data or "asm_id" not in species_data:
+            continue
+        
+        for asm_id, asm_data in species_data["asm_id"].items():
+            if not asm_data:
+                continue
+            
+            asm_files = get_assembly_files(species, asm_id)
+            if not asm_files:
+                continue
+            
+            expected_files.append(os.path.join(
+                config["OUT_FOLDER"], "GEP2_results", species, asm_id,
+                f"{asm_id}_report.md"
+            ))
+            expected_files.append(os.path.join(
+                config["OUT_FOLDER"], "GEP2_results", species, asm_id,
+                f"{asm_id}_report.pdf"
+            ))
+    
+    return expected_files
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN OUTPUT FUNCTION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_all_expected_outputs():
+    """
+    Get all expected outputs based on config flags.
+    This is the main function that combines all expected outputs.
+    """
+    expected_files = []
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Assembly stats (gfastats always runs, compleasm respects RUN_COMPL)
+    # ─────────────────────────────────────────────────────────────────────────
+    expected_files.extend(get_asm_stats_results())
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Read processing (if enabled)
+    # ─────────────────────────────────────────────────────────────────────────
+    reads_proc = _as_bool(config.get("READS_PROC", True))
+    if reads_proc:
+        expected_files.extend(get_read_processing_results())
+    else:
+        if IS_MAIN:
+            print("[GEP2] READS_PROC is off - skipping read processing")
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # K-mer analysis (if enabled)
+    # ─────────────────────────────────────────────────────────────────────────
+    kmer_stats = _as_bool(config.get("KMER_STATS", True))
+    if kmer_stats:
+        expected_files.extend(get_kmer_stats_results())
+    else:
+        if IS_MAIN:
+            print("[GEP2] KMER_STATS is off - skipping k-mer analysis")
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Final reports (always runs, adapts to what's available)
+    # ─────────────────────────────────────────────────────────────────────────
+    expected_files.extend(get_report_results())
+    
+    return expected_files
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INCLUDE RULE FILES (Includes must be AFTER all helper functions are defined)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+include: "rules/0_download_data.smk"
+include: "rules/A_asm_stats.smk"
+include: "rules/B_proc_reads.smk"
+include: "rules/C_kmer_analysis.smk"
+include: "rules/Z_reporting.smk"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TARGET RULE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+rule all:
+    input:
+        get_all_expected_outputs()
+

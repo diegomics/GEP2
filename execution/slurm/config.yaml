@@ -1,0 +1,32 @@
+executor: slurm
+jobs: 100
+restart-times: 0
+
+max-jobs-per-second: 10
+max-status-checks-per-second: 1
+seconds-between-status-checks: 60
+latency-wait: 90
+
+rerun-triggers: [mtime] # comment this line to track ALL changes
+printshellcmds: false
+keep-going: true
+software-deployment-method: [apptainer]
+apptainer-args: "--bind /scratch:/scratch"
+
+default-resources:
+  slurm_account: "agmazzoni"
+  slurm_partition: "begendiv,main,scavenger"
+  constraint: "no_gpu"
+  qos: "standard"
+  mem_mb: 2000
+  runtime: 60
+
+slurm:
+  output: "logs/{rule}/{rule}.{wildcards}.%j.out"
+  error: "logs/{rule}/{rule}.{wildcards}.%j.err"
+  jobname: "{rule}"
+  ###mail-user: "user@domain.de" # caution, you may get a ton of emails
+  ###mail-type: "FAIL,END" # Options: BEGIN,END,FAIL,REQUEUE,ALL,TIME_LIMIT_90
+  script_preamble: |
+    module load apptainer
+    set -euo pipefail

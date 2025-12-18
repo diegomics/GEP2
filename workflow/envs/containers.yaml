@@ -1,0 +1,4 @@
+# Container definitions for GEP2
+containers:
+  gep2_base: "docker://diegomics/gep2_base:0.1"
+  compleasm: "docker://quay.io/biocontainers/compleasm:0.2.7--pyh7e72e81_0"

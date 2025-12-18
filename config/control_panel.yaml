@@ -1,0 +1,79 @@
+###################################################################################################
+# MAIN SETTINGS                                                                                   #
+###################################################################################################
+
+# Path to the GEP2 data table containing assembly and read paths
+## Table columns: sp_name, asm_id, asm_files, read_type, read_files
+## Table extension is flexible (xlsx, csv...) and can be online (i.e., google drive)
+## For google drive and such, set anyone with the link as viewer
+DATA_TABLE: "https://docs.google.com/spreadsheets/d/1xmsstJGBo45SEQgCPncE76u51_VN5IDG9sFFafYkGfI/edit?usp=sharing"
+
+# Path where a folder named GEP2_results will be created
+OUT_FOLDER: "/scratch/ddepanis/gep2_test_results"
+
+# Per job max resources
+myCPU: 24      # Maximum cores per job (2-24)
+myRAM: 512     # Maximum RAM per job in GB (minimum 4)
+myRUN: 240     # Maximum time per job in HOURS
+
+
+###################################################################################################
+# OPTIONAL SETTINGS                                                                               #
+###################################################################################################
+
+# gene completeness evaluation --------------------------------------------------------------------
+
+# Run gene completeness analysis
+RUN_COMPL: on
+
+# Lineage selection
+## Options: "auto" for automatic detection, or specific lineage like "vertebrata_odb10"
+LINEAGE: "auto"
+
+# Use BUSCO instead COMPLEASM 
+PREFER_BUSCO: off # under development
+
+
+# Read processing ---------------------------------------------------------------------------------
+
+# Process reads (trim/QC). Set to off to skip read processing
+READS_PROC: on
+
+# Trim short reads (Illumina/10x), set to off to skip trimming
+TRIM_PE: on
+
+# Filter HiFi reads, set to off to skip filtering
+TRIM_HIFI: on
+
+# Correct ONT reads with Hifiasm (caution, may take several hours)
+CORRECT_ONT: on
+
+
+# K-mer analysis ----------------------------------------------------------------------------------
+
+# Run K-mer based analysis
+KMER_STATS: on
+
+# K-mer length (usually 21 or 31)
+KMER_LEN: 31
+
+# If more than one data type per sample, which one to use for k-mer analysis?
+## Options are given by assigning priority like: hifi>illumina>ont>hic  ...
+## Also, if a tech is not listed here, will be excluded if MERGE_TECH: on
+DATA_PRIORITY: "illumina>hifi>ont>hic"
+
+# Merge reads from all technologies for k-mer analysis
+## Options are off (use only highest priority tech) or on (merge k-mers from all techs)
+MERGE_TECH: on
+
+# Expected ploidy for GenomeScope2 analysis (1, 2, 3, 4, 5, or 6)
+PLOIDY: 2
+
+# Use FastK instead of Meryl
+USE_FASTK: off # under development
+
+# Long reads-based analysis -----------------------------------------------------------------------
+
+# Hi-C analysis -----------------------------------------------------------------------------------
+
+# Contamination analysis --------------------------------------------------------------------------

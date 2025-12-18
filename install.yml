@@ -1,0 +1,16 @@
+name: GEP2_env
+channels:
+ - conda-forge
+ - bioconda
+ - defaults
+dependencies:
+ - python
+ - snakemake=9.8.0
+ - snakemake-executor-plugin-slurm=1.4.0
+ - pandas
+ - numpy
+ - openpyxl
+ - pyyaml
+ - odfpy
+ - xlrd
+ - numbers-parser

@@ -1,0 +1,8 @@
+# Local execution configuration
+cores: 4  # Max cores to use simultaneously
+jobs: 4   # Max parallel jobs
+
+# Optional: Resource limits for local execution
+local-cores: 4
+max-threads: 8
+

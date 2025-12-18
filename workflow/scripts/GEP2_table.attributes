@@ -1,0 +1,5 @@
+sp_name: category (missing = None); mandatory; sanitise
+asm_id: category (missing = None); mandatory; sanitise
+asm_files: path (missing = None); mandatory
+read_type: category (missing = None); sanitise
+read_files: path (missing = None)
