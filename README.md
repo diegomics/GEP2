@@ -77,6 +77,8 @@ GEP2/execution/
 
 **First run takes longer** as containers need to be built.
 
+Load the conda environment like `conda activate GEP2_env` and in the GEP2 folder run:
+
 #### On HPC/Server/Cluster using [Slurm](https://slurm.schedmd.com/):
 ```bash
 nohup snakemake --profile execution/slurm &
