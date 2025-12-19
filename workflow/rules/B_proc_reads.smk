@@ -589,7 +589,7 @@ rule B02_trim_pe_fastp:
         runtime = time_func("trim_pe")
     container: CONTAINERS["gep2_base"]
     params:
-        extra_opts = lambda w: "--trim_front1 23" if _is_10x(w.read_type) else ""
+        extra_opts = lambda w: "--trim_front1 23 --trim_front2 0" if _is_10x(w.read_type) else ""
     log:
         os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
