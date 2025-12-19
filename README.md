@@ -48,7 +48,7 @@ The table should contain these columns:
 - **sp_name**: Species name in binomial nomenclature (e.g., `Vultur gryphus`)
 - **asm_id**: Assembly identifier (e.g., `hifiasm_l2`, `yahs_test`, or `ASM2260516v1`)
 - **asm_files**: Path to assembly file, URL, or accession number (e.g., `GCA_022605165.1`). If it's a link or accession, the pipeline will download the data automatically. If Pri/Alt or (Hap1/Hap2) assemblies available, add as comma-separated, like: `GCA_963854735.1, GCA_963694935.1`
-- **read_type**: Can be `illumina`, `10x`, `hifi`, or `ont` (variations like `PacBio`, `paired-end`, `linked-read`, `arima`, `promethion` are also accepted)
+- **read_type**: Can be `illumina`, `10x`, `hifi`, or `ont` (variations like `PacBio`, `paired-end`, `linked-read`, `arima`, `promethion` and others should also work fine)
 - **read_files**: Comma-separated list of paths to read files. Can also be accession numbers (e.g., `ERR12205285,ERR12205286`). For paired-end reads, list as: `forward1,reverse1,forward2,reverse2`. Also can use pattern expansion in paths, like `/readsA/*.fq.gz, /readsB/*.fq.gz` 
 
 ### 4) Configure the Control Panel
