@@ -128,12 +128,22 @@ def get_report_inspector_inputs(wildcards):
     if not long_rt:
         return []
     
-    inspector_dir = os.path.join(
-        config["OUT_FOLDER"], "GEP2_results", wildcards.species,
-        wildcards.asm_id, "inspector"
-    )
+    # Get Inspector outputs for each assembly file
+    asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
+    results = []
     
-    return [os.path.join(inspector_dir, "summary_statistics")]
+    for asm_key, asm_path in asm_files.items():
+        if not asm_path or asm_path == "None":
+            continue
+        
+        asm_basename = get_assembly_basename(asm_path)
+        inspector_dir = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", wildcards.species,
+            wildcards.asm_id, "inspector", asm_basename
+        )
+        results.append(os.path.join(inspector_dir, "summary_statistics"))
+    
+    return results
 
 
 def get_all_report_inputs(wildcards):

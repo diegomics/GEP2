@@ -1683,11 +1683,19 @@ def get_long_reads_analysis_results():
             if not has_long_reads:
                 continue
             
-            # Add Inspector outputs
-            inspector_dir = os.path.join(
-                config["OUT_FOLDER"], "GEP2_results", species, asm_id, "inspector"
-            )
-            results.append(os.path.join(inspector_dir, "summary_statistics"))
+            # Add Inspector outputs for each assembly file
+            asm_files = get_assembly_files(species, asm_id)
+            
+            for asm_key, asm_path in asm_files.items():
+                if not asm_path or asm_path == "None":
+                    continue
+                
+                asm_basename = get_assembly_basename(asm_path)
+                inspector_dir = os.path.join(
+                    config["OUT_FOLDER"], "GEP2_results", species, asm_id,
+                    "inspector", asm_basename
+                )
+                results.append(os.path.join(inspector_dir, "summary_statistics"))
     
     return results
 

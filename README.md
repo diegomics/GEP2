@@ -152,6 +152,9 @@ GEP2_results/
         │       └── {asm_file_name}_summary.txt
         ├── gfastats/
         │   └── {asm_file_name}_stats.txt
+        ├── inspector/
+        │   └── {asm_file_name}/
+        │       └── summary_statistics
         ├── k{k-mer_length}/
         │   ├── {asm_id}.hist
         │   ├── {asm_id}.meryl

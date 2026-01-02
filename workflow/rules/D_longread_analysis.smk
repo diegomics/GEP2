@@ -183,7 +183,7 @@ def get_inspector_datatype(wildcards):
 # RULES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-rule D00_run_inspector:
+rule D01_run_inspector:
     """Run Inspector for assembly evaluation using long reads."""
     input:
         asm = get_inspector_asm_input,
@@ -191,15 +191,16 @@ rule D00_run_inspector:
     output:
         summary = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
-            "inspector", "summary_statistics"
+            "inspector", "{asm_basename}", "summary_statistics"
         ),
         valid_contig = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
-            "inspector", "valid_contig.fa"
+            "inspector", "{asm_basename}", "valid_contig.fa"
         )
     params:
         outdir = lambda w: os.path.join(
-            config["OUT_FOLDER"], "GEP2_results", w.species, w.asm_id, "inspector"
+            config["OUT_FOLDER"], "GEP2_results", w.species, w.asm_id, 
+            "inspector", w.asm_basename
         ),
         datatype = get_inspector_datatype,
         reads_str = lambda w: " ".join(get_inspector_reads_input(w))
@@ -211,19 +212,19 @@ rule D00_run_inspector:
     log:
         os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
-            "logs", "D00_inspector.log"
+            "logs", "D00_inspector_{asm_basename}.log"
         )
     benchmark:
         os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
-            "logs", "D00_inspector_benchmark.txt"
+            "logs", "D00_inspector_{asm_basename}_benchmark.txt"
         )
     shell:
         """
         set -euo pipefail
         exec > {log} 2>&1
         
-        echo "[GEP2] Running Inspector for {wildcards.species}/{wildcards.asm_id}"
+        echo "[GEP2] Running Inspector for {wildcards.species}/{wildcards.asm_id}/{wildcards.asm_basename}"
         echo "[GEP2] Assembly: {input.asm}"
         echo "[GEP2] Reads: {params.reads_str}"
         echo "[GEP2] Datatype: {params.datatype}"
@@ -231,7 +232,7 @@ rule D00_run_inspector:
         mkdir -p {params.outdir}
         
         # Create temp directory
-        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_inspector_{wildcards.species}_{wildcards.asm_id}_XXXXXX")"
+        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_inspector_{wildcards.species}_{wildcards.asm_basename}_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
         
         cd "$TEMP_DIR"
