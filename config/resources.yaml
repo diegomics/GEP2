@@ -131,6 +131,14 @@ resources:
     mem_gb: 4
     runtime_min: 60
 
+# Long read analysis tools
+  inspector:
+    max_cpu: 16
+    mem_gb_per_uncompressed_gb: 1.5
+    base_mem_gb: 32
+    runtime_min_per_uncompressed_gb: 60      # 1h
+    base_runtime_min: 360                    # 6h
+
   # Read mapping tools
   bwa_index:
     max_cpu: 1

@@ -84,8 +84,26 @@ PLOIDY: 2
 # Use FastK instead of Meryl
 USE_FASTK: off # under development
 
+
 # Long reads-based analysis -----------------------------------------------------------------------
 
+# Run Inspector for assembly evaluation using long reads
+RUN_INSP: off
+
+# Skip Inspector for assemblies marked with skip=on in the data table
+SKIP_INSP: off
+
+
 # Hi-C analysis -----------------------------------------------------------------------------------
+
+# Run Hi-C analysis (chromap + PretextMap)
+RUN_HIC: off
+
+# Skip Hi-C analysis for assemblies marked with skip=on in the data table
+SKIP_HIC: off
+
+# Minimum mapping quality for PretextMap
+HIC_MAPQ: 10
+
 
 # Contamination analysis --------------------------------------------------------------------------

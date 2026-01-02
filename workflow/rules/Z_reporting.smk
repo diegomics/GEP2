@@ -113,6 +113,29 @@ def get_report_genomescope_input(wildcards):
     )]
 
 
+def get_report_inspector_inputs(wildcards):
+    """Get Inspector output files if long read analysis was run."""
+    # Global toggle
+    if not _as_bool(config.get("RUN_INSP", True)):
+        return []
+    
+    # Per-assembly skip
+    if _should_skip_analysis(wildcards.species, wildcards.asm_id, "insp"):
+        return []
+    
+    # Check for long reads
+    long_rt = _get_long_read_type_for_assembly(wildcards.species, wildcards.asm_id)
+    if not long_rt:
+        return []
+    
+    inspector_dir = os.path.join(
+        config["OUT_FOLDER"], "GEP2_results", wildcards.species,
+        wildcards.asm_id, "inspector"
+    )
+    
+    return [os.path.join(inspector_dir, "summary_statistics")]
+
+
 def get_all_report_inputs(wildcards):
     """Collect all inputs for the report rule."""
     inputs = []
@@ -130,6 +153,9 @@ def get_all_report_inputs(wildcards):
     
     # GenomeScope2 if enabled
     inputs.extend(get_report_genomescope_input(wildcards))
+
+    # Inspector if enabled and has long reads
+    inputs.extend(get_report_inspector_inputs(wildcards))
     
     return inputs
 

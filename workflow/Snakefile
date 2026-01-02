@@ -1648,6 +1648,50 @@ def _get_reads_for_assembly(species, asm_id):
         return []
 
 
+# COLLECTORS - Long Reads Analysis
+# ───────────────────────────────────────────────────────────────────────────────
+
+def get_long_reads_analysis_results():
+    """Collect all Inspector outputs if enabled and long reads are available."""
+    results = []
+    
+    # Check global toggle
+    if not _as_bool(config.get("RUN_INSP", True)):
+        return results
+    
+    for species, sp_data in samples_config.get("sp_name", {}).items():
+        for asm_id, asm_data in sp_data.get("asm_id", {}).items():
+            # Check per-assembly skip
+            if _should_skip_analysis(species, asm_id, "insp"):
+                continue
+            
+            # Check for long reads (hifi or ont)
+            has_long_reads = False
+            read_type_dict = asm_data.get("read_type", {})
+            
+            for read_type, rt_data in read_type_dict.items():
+                if not read_type or read_type == "None" or not rt_data:
+                    continue
+                
+                rt_normalized = normalize_read_type(read_type)
+                if rt_normalized in ["hifi", "ont"]:
+                    read_files = rt_data.get("read_files", {})
+                    if any(v and v != "None" for v in read_files.values()):
+                        has_long_reads = True
+                        break
+            
+            if not has_long_reads:
+                continue
+            
+            # Add Inspector outputs
+            inspector_dir = os.path.join(
+                config["OUT_FOLDER"], "GEP2_results", species, asm_id, "inspector"
+            )
+            results.append(os.path.join(inspector_dir, "summary_statistics"))
+    
+    return results
+
+
 # COLLECTORS - Reports
 # ───────────────────────────────────────────────────────────────────────────────
 
@@ -1693,14 +1737,10 @@ def get_all_expected_outputs():
     """
     expected_files = []
     
-    # ─────────────────────────────────────────────────────────────────────────
     # Assembly stats (gfastats always runs, compleasm respects RUN_COMPL)
-    # ─────────────────────────────────────────────────────────────────────────
     expected_files.extend(get_asm_stats_results())
     
-    # ─────────────────────────────────────────────────────────────────────────
     # Read processing (if enabled)
-    # ─────────────────────────────────────────────────────────────────────────
     reads_proc = _as_bool(config.get("READS_PROC", True))
     if reads_proc:
         expected_files.extend(get_read_processing_results())
@@ -1708,9 +1748,7 @@ def get_all_expected_outputs():
         if IS_MAIN:
             print("[GEP2] READS_PROC is off - skipping read processing")
     
-    # ─────────────────────────────────────────────────────────────────────────
     # K-mer analysis (if enabled)
-    # ─────────────────────────────────────────────────────────────────────────
     kmer_stats = _as_bool(config.get("KMER_STATS", True))
     if kmer_stats:
         expected_files.extend(get_kmer_stats_results())
@@ -1718,9 +1756,15 @@ def get_all_expected_outputs():
         if IS_MAIN:
             print("[GEP2] KMER_STATS is off - skipping k-mer analysis")
     
-    # ─────────────────────────────────────────────────────────────────────────
+    # Long reads analysis - Inspector (if enabled and long reads available)
+    run_insp = _as_bool(config.get("RUN_INSP", True))
+    if run_insp:
+        expected_files.extend(get_long_reads_analysis_results())
+    else:
+        if IS_MAIN:
+            print("[GEP2] RUN_INSP is off - skipping Inspector analysis")
+    
     # Final reports (always runs, adapts to what's available)
-    # ─────────────────────────────────────────────────────────────────────────
     expected_files.extend(get_report_results())
     
     return expected_files
@@ -1734,6 +1778,7 @@ include: "rules/0_download_data.smk"
 include: "rules/A_asm_stats.smk"
 include: "rules/B_proc_reads.smk"
 include: "rules/C_kmer_analysis.smk"
+include: "rules/D_long_analysis.smk"
 include: "rules/Z_reporting.smk"
 
 
