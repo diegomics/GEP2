@@ -52,7 +52,12 @@ def get_report_compleasm_inputs(wildcards):
 
 def get_report_merqury_inputs(wildcards):
     """Get Merqury output files if k-mer analysis was run."""
+    # Global toggle
     if not _as_bool(config.get("KMER_STATS", True)):
+        return {'qv': [], 'completeness': []}
+    
+    # Per-assembly skip
+    if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
         return {'qv': [], 'completeness': []}
     
     # Check if this assembly has reads
@@ -87,7 +92,12 @@ def get_report_merqury_inputs(wildcards):
 
 def get_report_genomescope_input(wildcards):
     """Get GenomeScope2 plot if k-mer analysis was run."""
+    # Global toggle
     if not _as_bool(config.get("KMER_STATS", True)):
+        return []
+    
+    # Per-assembly skip
+    if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
         return []
     
     read_type = get_priority_read_type_for_assembly(wildcards.species, wildcards.asm_id)

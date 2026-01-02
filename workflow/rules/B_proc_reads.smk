@@ -652,9 +652,7 @@ rule B03_ont_correction:
         
         mkdir -p $(dirname {output.corrected}) $(dirname {log})
         
-        BASE="${{GEP2_TMP:-$TMPDIR}}"
-        mkdir -p "$BASE"
-        TEMP_DIR=$(mktemp -d "$BASE/GEP2_ont_correct_{wildcards.species}_{wildcards.read_type}_{wildcards.base}_XXXXXX")
+        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_ont_correct_{wildcards.species}_{wildcards.read_type}_{wildcards.base}_XXXXXX")"
         cd $TEMP_DIR
         
         echo "Starting ONT correction with Hifiasm..." > {log}
@@ -745,9 +743,7 @@ rule B04_check_uli_primers:
         
         mkdir -p $(dirname {output.report})
         
-        BASE="${{GEP2_TMP:-$TMPDIR}}"
-        mkdir -p "$BASE"
-        TEMP_DIR="$(mktemp -d "$BASE/GEP2_uli_check_XXXXXX")"
+        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_uli_check_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
         cd "$TEMP_DIR"
         
@@ -818,9 +814,7 @@ rule B05_filter_hifi_adapters:
         mkdir -p $(dirname {output.filtered})
         mkdir -p $(dirname {output.report})
         
-        BASE="${{GEP2_TMP:-$TMPDIR}}"
-        mkdir -p "$BASE"
-        TEMP_DIR="$(mktemp -d "$BASE/GEP2_hifi_filter_XXXXXX")"
+        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_hifi_filter_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
         cd "$TEMP_DIR"
         
@@ -903,9 +897,7 @@ rule B06_fastqc_pe_reads:
         
         mkdir -p $(dirname {output.html})
         
-        BASE="${{GEP2_TMP:-$TMPDIR}}"
-        mkdir -p "$BASE"
-        TEMP_DIR="$(mktemp -d "$BASE/GEP2_fastqc_XXXXXX")"
+        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_fastqc_XXXXXX")"
         cd "$TEMP_DIR"
         
         TEMP_SUB="{wildcards.read_type}_Path{wildcards.idx}_{wildcards.base}_{wildcards.read}.fq"
@@ -958,9 +950,7 @@ rule B06_fastqc_long_reads:
         
         mkdir -p $(dirname {output.html})
         
-        BASE="${{GEP2_TMP:-$TMPDIR}}"
-        mkdir -p "$BASE"
-        TEMP_DIR="$(mktemp -d "$BASE/GEP2_fastqc_XXXXXX")"
+        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_fastqc_XXXXXX")"
         cd "$TEMP_DIR"
         
         TEMP_SUB="{wildcards.read_type}_Path{wildcards.idx}_{wildcards.base}.fq"
@@ -1007,7 +997,7 @@ rule B07_nanoplot_long_reads:
         
         mkdir -p {output.dir}
         
-        TEMP_DIR=$(mktemp -d "$TMPDIR/nanoplot_XXXXXX")
+        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_nanoplot_XXXXXX")"
         cd $TEMP_DIR
         
         seqtk sample -s456 {input.reads} 250000 | gzip -c > subsample.fq.gz

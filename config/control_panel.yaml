@@ -16,6 +16,15 @@ myCPU: 24      # Maximum cores per job (2-24)
 myRAM: 512     # Maximum RAM per job in GB (minimum 4)
 myRUN: 240     # Maximum time per job in HOURS
 
+# General purpose temp directory for intermediate files
+## Options: "auto" (uses OUT_FOLDER/tmp, shows hints for faster options)
+## Or specify a path like "/localscratch", "/local", or a local SSD
+TEMP_DIR: "/localscratch"
+
+# Fast temp directory for I/O-intensive operations (e.g., contamination screening)
+## Options: "auto" (falls back to TEMP_DIR, shows hints for RAM-based options)
+## Or specify a fast path like "/dev/shm" or another RAM-mounted filesystem
+FAST_TEMP_DIR: "/dev/shm"
 
 ###################################################################################################
 # OPTIONAL SETTINGS                                                                               #
@@ -53,6 +62,9 @@ CORRECT_ONT: on
 
 # Run K-mer based analysis
 KMER_STATS: on
+
+# Skip k-mer analysis for assemblies marked with skip=on in the data table
+SKIP_KMER: off
 
 # K-mer length (usually 21 or 31)
 KMER_LEN: 31

@@ -2184,7 +2184,7 @@ class TableAnalyzer:
             # If not placed by domain knowledge, use data-driven approach
             if not placed:
                 # Find where property becomes constant by checking from deepest to shallowest
-                for level in range(len(hierarchy_columns) - 1, -1, -1):
+                for level in range(len(hierarchy_columns)):
                     group_cols = hierarchy_columns[:level + 1]
                     
                     # Check if property is constant within groups at this level

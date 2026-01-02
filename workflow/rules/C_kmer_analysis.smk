@@ -144,6 +144,10 @@ def _get_reads_for_assembly(species, asm_id):
 
 def get_assembly_kmer_db_inputs(wildcards):
     """Get the per-read k-mer DBs needed for an assembly."""
+    # Check if k-mer analysis should be skipped for this assembly
+    if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
+        return []
+    
     reads = _get_reads_for_assembly(wildcards.species, wildcards.asm_id)
     
     # Determine k-mer length (use priority read type for k-mer length decision)
@@ -163,6 +167,10 @@ def get_assembly_kmer_db_inputs(wildcards):
 
 def get_merqury_db_input(wildcards):
     """Get the merged k-mer database path for this assembly."""
+    # Check if k-mer analysis should be skipped for this assembly
+    if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
+        return []
+    
     read_type = get_priority_read_type(wildcards.species)
     if not read_type:
         raise ValueError(f"No reads available for {wildcards.species}")
@@ -174,6 +182,10 @@ def get_merqury_db_input(wildcards):
 
 def get_merqury_asm_inputs(wildcards):
     """Get assembly files for Merqury, in sorted order."""
+    # Check if k-mer analysis should be skipped for this assembly
+    if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
+        return []
+    
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
     return [v for k, v in sorted(asm_files.items()) if v and v != "None"]
 
@@ -221,7 +233,7 @@ rule C00_build_per_read_kmer_db:
         
         mkdir -p $(dirname {output.meryl_db})
         
-        TEMP_DIR=$(mktemp -d "$TMPDIR/meryl_{wildcards.species}_{wildcards.base}_XXXXXX")
+        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_meryl_{wildcards.species}_{wildcards.base}_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
         cd $TEMP_DIR
         
@@ -415,7 +427,7 @@ rule C02_run_merqury:
         
         mkdir -p {params.outdir}
         
-        TEMP_DIR=$(mktemp -d "$TMPDIR/merqury_{wildcards.species}_{wildcards.asm_id}_XXXXXX")
+        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_merqury_{wildcards.species}_{wildcards.asm_id}_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
         cd $TEMP_DIR
         
