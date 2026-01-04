@@ -1700,6 +1700,64 @@ def get_long_reads_analysis_results():
     return results
 
 
+# COLLECTORS - Hi-C Analysis
+# ───────────────────────────────────────────────────────────────────────────────
+
+def get_hic_analysis_results():
+    """Collect all Hi-C analysis outputs if enabled and Hi-C reads are available."""
+    results = []
+    
+    # Check global toggle
+    if not _as_bool(config.get("RUN_HIC", True)):
+        return results
+    
+    for species, sp_data in samples_config.get("sp_name", {}).items():
+        for asm_id, asm_data in sp_data.get("asm_id", {}).items():
+            # Check per-assembly skip
+            if _should_skip_analysis(species, asm_id, "hic"):
+                continue
+            
+            # Check for Hi-C reads
+            has_hic_reads = False
+            read_type_dict = asm_data.get("read_type", {})
+            
+            for read_type, rt_data in read_type_dict.items():
+                if not read_type or read_type == "None" or not rt_data:
+                    continue
+                
+                rt_normalized = normalize_read_type(read_type)
+                if rt_normalized == "hic":
+                    read_files = rt_data.get("read_files", {})
+                    if any(v and v != "None" for v in read_files.values()):
+                        has_hic_reads = True
+                        break
+            
+            if not has_hic_reads:
+                continue
+            
+            # Add Hi-C outputs for each assembly file
+            asm_files = get_assembly_files(species, asm_id)
+            
+            for asm_key, asm_path in asm_files.items():
+                if not asm_path or asm_path == "None":
+                    continue
+                
+                asm_basename = get_assembly_basename(asm_path)
+                hic_dir = os.path.join(
+                    config["OUT_FOLDER"], "GEP2_results", species, asm_id,
+                    "hic", asm_basename
+                )
+                
+                # Main outputs
+                results.extend([
+                    os.path.join(hic_dir, f"{asm_basename}.pretext"),
+                    os.path.join(hic_dir, f"{asm_basename}.mcool"),
+                    os.path.join(hic_dir, f"{asm_basename}.pairtools_stats.txt")
+                ])
+    
+    return results
+
+
 # COLLECTORS - Reports
 # ───────────────────────────────────────────────────────────────────────────────
 
@@ -1771,6 +1829,14 @@ def get_all_expected_outputs():
     else:
         if IS_MAIN:
             print("[GEP2] RUN_INSP is off - skipping Inspector analysis")
+
+    # Hi-C analysis (if enabled and Hi-C reads available)
+    run_hic = _as_bool(config.get("RUN_HIC", True))
+    if run_hic:
+        expected_files.extend(get_hic_analysis_results())
+    else:
+        if IS_MAIN:
+            print("[GEP2] RUN_HIC is off - skipping Hi-C analysis")
     
     # Final reports (always runs, adapts to what's available)
     expected_files.extend(get_report_results())
@@ -1787,6 +1853,7 @@ include: "rules/A_asm_stats.smk"
 include: "rules/B_proc_reads.smk"
 include: "rules/C_kmer_analysis.smk"
 include: "rules/D_long_analysis.smk"
+include: "rules/E_hic_analysis.smk"
 include: "rules/Z_reporting.smk"
 
 

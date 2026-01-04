@@ -105,5 +105,7 @@ SKIP_HIC: off
 # Minimum mapping quality for PretextMap
 HIC_MAPQ: 10
 
+# Bin size for cooler (base pairs)
+HIC_BINSIZE: 10000
 
 # Contamination analysis --------------------------------------------------------------------------

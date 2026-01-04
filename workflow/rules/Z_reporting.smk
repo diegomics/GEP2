@@ -146,6 +146,42 @@ def get_report_inspector_inputs(wildcards):
     return results
 
 
+def get_report_hic_inputs(wildcards):
+    """Get Hi-C analysis output files if analysis was run."""
+    # Global toggle
+    if not _as_bool(config.get("RUN_HIC", True)):
+        return []
+    
+    # Per-assembly skip
+    if _should_skip_analysis(wildcards.species, wildcards.asm_id, "hic"):
+        return []
+    
+    # Check for Hi-C reads
+    if not _has_hic_reads_for_assembly(wildcards.species, wildcards.asm_id):
+        return []
+    
+    # Get Hi-C outputs for each assembly file
+    asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
+    results = []
+    
+    for asm_key, asm_path in asm_files.items():
+        if not asm_path or asm_path == "None":
+            continue
+        
+        asm_basename = get_assembly_basename(asm_path)
+        hic_dir = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", wildcards.species,
+            wildcards.asm_id, "hic", asm_basename
+        )
+        
+        results.extend([
+            os.path.join(hic_dir, f"{asm_basename}.pretext"),
+            os.path.join(hic_dir, f"{asm_basename}.pairtools_stats.txt")
+        ])
+    
+    return results
+
+
 def get_all_report_inputs(wildcards):
     """Collect all inputs for the report rule."""
     inputs = []
