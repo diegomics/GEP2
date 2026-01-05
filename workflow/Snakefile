@@ -39,113 +39,6 @@ _MISSING_IN = None  # Will be set after out_folder is defined
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TEMP DIRECTORY LOGIC
-# ═══════════════════════════════════════════════════════════════════════════════
-# Two temp directories:
-#   TEMP_DIR (GEP2_TMP)      - general purpose temp (local SSD preferred)
-#   FAST_TEMP_DIR (GEP2_FAST_TMP) - for I/O intensive operations (RAM preferred)
-#
-# Default behavior: Use OUT_FOLDER/GEP2_results/tmp but show hints about better options
-# Custom path: Use that path directly
-
-def _detect_local_temp_options():
-    """Detect available local temp directories (SSDs, local disks)"""
-    candidates = ["/localscratch", "/local", "/scratch", "/tmp"]
-    options = []
-    for path in candidates:
-        try:
-            if os.path.isdir(path) and os.access(path, os.W_OK):
-                st = os.statvfs(path)
-                free_gb = st.f_bavail * st.f_frsize / (1024**3)
-                if free_gb > 5:  # Only show if >5GB free
-                    options.append((path, "local", free_gb))
-        except:
-            pass
-    return options
-
-
-def _detect_ramfs_mounts():
-    """Detect RAM-mounted filesystems"""
-    mounts = []
-    try:
-        with open("/proc/mounts") as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) >= 3:
-                    dev, mnt, fstype = parts[0], parts[1], parts[2]
-                    if fstype in ("tmpfs", "ramfs", "hugetlbfs"):
-                        try:
-                            st = os.statvfs(mnt)
-                            free_gb = st.f_bavail * st.f_frsize / (1024**3)
-                            if free_gb > 10:  # Only show if >10GB free
-                                mounts.append((mnt, fstype, free_gb))
-                        except:
-                            pass
-    except:
-        pass
-    return mounts
-
-
-# Default temp directory under results folder
-OUT_TMP = os.path.join(config["OUT_FOLDER"], "GEP2_results", "tmp")
-os.makedirs(OUT_TMP, exist_ok=True)
-
-# --- Parse TEMP_DIR config ---
-_temp_dir_raw = str(config.get("TEMP_DIR", "")).strip().lower()
-
-if _temp_dir_raw in ("", "auto"):
-    TEMP_DIR = OUT_TMP
-    local_options = _detect_local_temp_options()
-    if local_options:
-        print(f"[GEP2] TEMP_DIR → {TEMP_DIR} (default)")
-        print(f"[GEP2] ⚡ Local temp directories detected - consider setting TEMP_DIR for better performance:")
-        for path, typ, free_gb in local_options:
-            print(f"       - {path} [{typ}] ~{free_gb:.1f} GiB free")
-    else:
-        print(f"[GEP2] TEMP_DIR → {TEMP_DIR}")
-else:
-    TEMP_DIR = str(config.get("TEMP_DIR", "")).strip()  # Preserve original case
-    try:
-        os.makedirs(TEMP_DIR, exist_ok=True)
-        print(f"[GEP2] TEMP_DIR → {TEMP_DIR}")
-    except Exception as e:
-        print(f"[GEP2] ⚠️  Could not create TEMP_DIR '{TEMP_DIR}': {e}")
-        print(f"[GEP2] Falling back to {OUT_TMP}")
-        TEMP_DIR = OUT_TMP
-
-# --- Parse FAST_TEMP_DIR config ---
-_fast_temp_raw = str(config.get("FAST_TEMP_DIR", "")).strip().lower()
-
-if _fast_temp_raw in ("", "auto"):
-    FAST_TEMP_DIR = TEMP_DIR  # Fall back to TEMP_DIR
-    ram_options = _detect_ramfs_mounts()
-    if ram_options:
-        print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR} (default, same as TEMP_DIR)")
-        print(f"[GEP2] ⚡ RAM-mounted filesystems detected - consider setting FAST_TEMP_DIR for faster I/O:")
-        for mnt, typ, free_gb in ram_options:
-            print(f"       - {mnt} [{typ}] ~{free_gb:.1f} GiB free")
-    else:
-        print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR}")
-else:
-    FAST_TEMP_DIR = str(config.get("FAST_TEMP_DIR", "")).strip()  # Preserve original case
-    try:
-        os.makedirs(FAST_TEMP_DIR, exist_ok=True)
-        print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR}")
-    except Exception as e:
-        print(f"[GEP2] ⚠️  Could not create FAST_TEMP_DIR '{FAST_TEMP_DIR}': {e}")
-        print(f"[GEP2] Falling back to TEMP_DIR: {TEMP_DIR}")
-        FAST_TEMP_DIR = TEMP_DIR
-
-# Export environment variables for all shell commands
-shell.prefix(
-    f"set -euo pipefail; "
-    f"export TMPDIR='{TEMP_DIR}'; "
-    f"export GEP2_TMP='{TEMP_DIR}'; "
-    f"export GEP2_FAST_TMP='{FAST_TEMP_DIR}'; "
-)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # UTILITIES (pure functions, no dependencies on config)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -357,6 +250,113 @@ if os.path.exists(manifest_path):
         for entry in DOWNLOAD_MANIFEST:
             if entry["type"] == "reads":
                 DOWNLOAD_MANIFEST_DICT[entry["destination"]] = entry
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEMP DIRECTORY LOGIC
+# ═══════════════════════════════════════════════════════════════════════════════
+# Two temp directories:
+#   TEMP_DIR (GEP2_TMP)      - general purpose temp (local SSD preferred)
+#   FAST_TEMP_DIR (GEP2_FAST_TMP) - for I/O intensive operations (RAM preferred)
+#
+# Default behavior: Use OUT_FOLDER/GEP2_results/tmp but show hints about better options
+# Custom path: Use that path directly
+
+def _detect_local_temp_options():
+    """Detect available local temp directories (SSDs, local disks)"""
+    candidates = ["/localscratch", "/local", "/scratch", "/tmp"]
+    options = []
+    for path in candidates:
+        try:
+            if os.path.isdir(path) and os.access(path, os.W_OK):
+                st = os.statvfs(path)
+                free_gb = st.f_bavail * st.f_frsize / (1024**3)
+                if free_gb > 5:  # Only show if >5GB free
+                    options.append((path, "local", free_gb))
+        except:
+            pass
+    return options
+
+
+def _detect_ramfs_mounts():
+    """Detect RAM-mounted filesystems"""
+    mounts = []
+    try:
+        with open("/proc/mounts") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 3:
+                    dev, mnt, fstype = parts[0], parts[1], parts[2]
+                    if fstype in ("tmpfs", "ramfs", "hugetlbfs"):
+                        try:
+                            st = os.statvfs(mnt)
+                            free_gb = st.f_bavail * st.f_frsize / (1024**3)
+                            if free_gb > 10:  # Only show if >10GB free
+                                mounts.append((mnt, fstype, free_gb))
+                        except:
+                            pass
+    except:
+        pass
+    return mounts
+
+
+# Default temp directory under results folder
+OUT_TMP = os.path.join(config["OUT_FOLDER"], "GEP2_results", "tmp")
+os.makedirs(OUT_TMP, exist_ok=True)
+
+# --- Parse TEMP_DIR config ---
+_temp_dir_raw = str(config.get("TEMP_DIR", "")).strip().lower()
+
+if _temp_dir_raw in ("", "auto"):
+    TEMP_DIR = OUT_TMP
+    local_options = _detect_local_temp_options()
+    if local_options:
+        print(f"[GEP2] TEMP_DIR → {TEMP_DIR} (default)")
+        print(f"[GEP2] ⚡ Local temp directories detected - consider setting TEMP_DIR for better performance:")
+        for path, typ, free_gb in local_options:
+            print(f"       - {path} [{typ}] ~{free_gb:.1f} GiB free")
+    else:
+        print(f"[GEP2] TEMP_DIR → {TEMP_DIR}")
+else:
+    TEMP_DIR = str(config.get("TEMP_DIR", "")).strip()  # Preserve original case
+    try:
+        os.makedirs(TEMP_DIR, exist_ok=True)
+        print(f"[GEP2] TEMP_DIR → {TEMP_DIR}")
+    except Exception as e:
+        print(f"[GEP2] ⚠️  Could not create TEMP_DIR '{TEMP_DIR}': {e}")
+        print(f"[GEP2] Falling back to {OUT_TMP}")
+        TEMP_DIR = OUT_TMP
+
+# --- Parse FAST_TEMP_DIR config ---
+_fast_temp_raw = str(config.get("FAST_TEMP_DIR", "")).strip().lower()
+
+if _fast_temp_raw in ("", "auto"):
+    FAST_TEMP_DIR = TEMP_DIR  # Fall back to TEMP_DIR
+    ram_options = _detect_ramfs_mounts()
+    if ram_options:
+        print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR} (default, same as TEMP_DIR)")
+        print(f"[GEP2] ⚡ RAM-mounted filesystems detected - consider setting FAST_TEMP_DIR for faster I/O:")
+        for mnt, typ, free_gb in ram_options:
+            print(f"       - {mnt} [{typ}] ~{free_gb:.1f} GiB free")
+    else:
+        print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR}")
+else:
+    FAST_TEMP_DIR = str(config.get("FAST_TEMP_DIR", "")).strip()  # Preserve original case
+    try:
+        os.makedirs(FAST_TEMP_DIR, exist_ok=True)
+        print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR}")
+    except Exception as e:
+        print(f"[GEP2] ⚠️  Could not create FAST_TEMP_DIR '{FAST_TEMP_DIR}': {e}")
+        print(f"[GEP2] Falling back to TEMP_DIR: {TEMP_DIR}")
+        FAST_TEMP_DIR = TEMP_DIR
+
+# Export environment variables for all shell commands
+shell.prefix(
+    f"set -euo pipefail; "
+    f"export TMPDIR='{TEMP_DIR}'; "
+    f"export GEP2_TMP='{TEMP_DIR}'; "
+    f"export GEP2_FAST_TMP='{FAST_TEMP_DIR}'; "
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1852,7 +1852,7 @@ include: "rules/0_download_data.smk"
 include: "rules/A_asm_stats.smk"
 include: "rules/B_proc_reads.smk"
 include: "rules/C_kmer_analysis.smk"
-include: "rules/D_long_analysis.smk"
+include: "rules/D_longread_analysis.smk"
 include: "rules/E_hic_analysis.smk"
 include: "rules/Z_reporting.smk"
 
