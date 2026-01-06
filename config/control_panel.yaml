@@ -72,7 +72,7 @@ DATA_PRIORITY: "illumina>hifi>ont>hic"
 
 # Merge reads from all technologies for k-mer analysis
 ## Options are off (use only highest priority tech) or on (merge k-mers from all techs)
-MERGE_TECH: on
+MERGE_TECH: off
 
 # Expected ploidy for GenomeScope2 analysis (1, 2, 3, 4, 5, or 6)
 PLOIDY: 2
