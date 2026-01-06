@@ -35,10 +35,6 @@ FAST_TEMP_DIR: "/dev/shm"
 # Run gene completeness analysis
 RUN_COMPL: on
 
-# Lineage selection
-## Options: "auto" for automatic detection, or specific lineage like "vertebrata_odb10"
-LINEAGE: "auto"
-
 # Use BUSCO instead COMPLEASM 
 PREFER_BUSCO: off # under development
 
