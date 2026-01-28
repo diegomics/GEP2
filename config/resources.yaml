@@ -63,7 +63,7 @@ resources:
   # Download data
   download_data:
     max_cpu: 2
-    mem_gb: 4
+    mem_gb: 8
     runtime_min: 1080                       # 18h
 
   # Assembly statistics tools
@@ -131,13 +131,50 @@ resources:
     mem_gb: 4
     runtime_min: 60
 
-# Long read analysis tools
+  # Long read analysis tools
   inspector:
-    max_cpu: 16
-    mem_gb_per_uncompressed_gb: 1.5
-    base_mem_gb: 32
-    runtime_min_per_uncompressed_gb: 60      # 1h
+    max_cpu: 18
+    mem_gb_per_uncompressed_gb: 0.2
+    base_mem_gb: 24
+    runtime_min_per_uncompressed_gb: 20
     base_runtime_min: 360                    # 6h
+
+  # Hi-C analysis tools
+  chromap_index:
+    max_cpu: 4
+    mem_gb_per_uncompressed_gb: 25.0
+    base_mem_gb: 24
+    runtime_min_per_uncompressed_gb: 10
+    base_runtime_min: 60                    # 1h
+
+  chromap_map:
+    max_cpu: 16
+    mem_gb_per_uncompressed_gb: 0.2
+    base_mem_gb: 24
+    runtime_min_per_uncompressed_gb: 5
+    base_runtime_min: 240                   # 4h
+
+  pretext_map:
+    max_cpu: 4
+    mem_gb_per_uncompressed_gb: 0.3
+    base_mem_gb: 16
+    runtime_min_per_uncompressed_gb: 20
+    base_runtime_min: 120                   # 2h
+
+  # Track generation for Pretext
+  track_light:
+    max_cpu: 2
+    mem_gb_per_uncompressed_gb: 2.0
+    base_mem_gb: 4
+    runtime_min_per_uncompressed_gb: 10
+    base_runtime_min: 60                    # 1h
+
+  track_heavy:
+    max_cpu: 4
+    mem_gb_per_uncompressed_gb: 4.0
+    base_mem_gb: 16
+    runtime_min_per_uncompressed_gb: 30
+    base_runtime_min: 120                   # 2h
 
   # Read mapping tools
   bwa_index:

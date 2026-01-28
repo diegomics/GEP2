@@ -1,10 +1,10 @@
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # GEP2 - K-mer Analysis Rules
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # INPUT FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 def _get_processed_read_path(species, read_type, idx, base):
     """Get the processed read path for k-mer counting."""
@@ -93,55 +93,6 @@ def get_per_read_kmer_input(wildcards):
     raise ValueError(f"Could not find processed read file for {species}/{read_type}/{base}")
 
 
-def _get_reads_for_assembly(species, asm_id):
-    """Get the read files assigned to a specific assembly."""
-    try:
-        sp_data = samples_config["sp_name"][species]
-        asm_data = sp_data["asm_id"].get(asm_id, {})
-        read_type_dict = asm_data.get("read_type", {})
-        
-        reads_info = []
-        for rt_key, rt_data in read_type_dict.items():
-            read_type = normalize_read_type(rt_key)
-            read_files = rt_data.get("read_files", {})
-            
-            for path_key, path_value in sorted(read_files.items()):
-                if not path_value or path_value == "None":
-                    continue
-                
-                # Handle comma-separated paths (paired-end)
-                if isinstance(path_value, str) and "," in path_value:
-                    paths = [p.strip() for p in path_value.split(",")]
-                else:
-                    paths = [path_value]
-                
-                for p in paths:
-                    # Extract base name (e.g., ERR12205285 from hifi_Path1_ERR12205285.fq.gz)
-                    basename = os.path.basename(p)
-                    base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', basename, flags=re.IGNORECASE)
-                    base = base.replace(".fq.gz", "").replace(".fastq.gz", "")
-                    base = base.replace("_1", "").replace("_2", "")  # Remove pair suffix
-                    base = base.replace("_filtered", "").replace("_corrected", "").replace("_trimmed", "")
-                    
-                    reads_info.append({
-                        "read_type": read_type,
-                        "base": base,
-                        "path": p
-                    })
-        
-        # Deduplicate by base name
-        seen = set()
-        unique_reads = []
-        for r in reads_info:
-            if r["base"] not in seen:
-                seen.add(r["base"])
-                unique_reads.append(r)
-        
-        return unique_reads
-    except (KeyError, TypeError, AttributeError):
-        return []
-
-
 def get_assembly_kmer_db_inputs(wildcards):
     """Get the per-read k-mer DBs needed for an assembly."""
     # Check if k-mer analysis should be skipped for this assembly
@@ -196,9 +147,9 @@ def get_asm_count(wildcards):
     return len([v for v in asm_files.values() if v and v != "None"])
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES - Per-Read K-mer Database Construction
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule C00_build_per_read_kmer_db:
     """Build Meryl k-mer database for a single read file."""
@@ -233,8 +184,10 @@ rule C00_build_per_read_kmer_db:
         
         mkdir -p $(dirname {output.meryl_db})
         
-        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_meryl_{wildcards.species}_{wildcards.base}_XXXXXX")"
+        WORK_DIR="$(gep2_get_workdir 100)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_meryl_{wildcards.species}_{wildcards.base}_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
+
         cd $TEMP_DIR
         
         meryl k={wildcards.kmer_len} \\
@@ -249,9 +202,9 @@ rule C00_build_per_read_kmer_db:
         """
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES - Assembly-Specific K-mer Database (merge or symlink)
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule C00_merge_assembly_kmer_db:
     """Create assembly-specific k-mer database (symlink if 1 read, union-sum if multiple)."""
@@ -289,36 +242,42 @@ rule C00_merge_assembly_kmer_db:
         echo "[GEP2] Creating assembly-specific k-mer database for {wildcards.asm_id}"
         echo "[GEP2] Input databases: {params.db_count}"
         
-        mkdir -p $(dirname {output.meryl_db})
+        WORK_DIR="$(gep2_get_workdir 100)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_merge_kmer_{wildcards.species}_{wildcards.asm_id}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
         
-        # Remove any existing directory/symlink
-        rm -rf {output.meryl_db}
+        cd "$TEMP_DIR"
         
         if [ {params.db_count} -eq 1 ]; then
             echo "[GEP2] Single read - copying k-mer database"
-            cp -r {input.dbs} {output.meryl_db}
-            echo "[GEP2] Copied to {output.meryl_db}"
+            cp -r {input.dbs} merged.meryl
         else
             echo "[GEP2] Multiple reads - running union-sum"
-            meryl k={wildcards.kmer_len} \\
-                threads={threads} \\
-                union-sum \\
-                output {output.meryl_db} \\
+            meryl k={wildcards.kmer_len} \
+                threads={threads} \
+                union-sum \
+                output merged.meryl \
                 {params.db_list}
-            echo "[GEP2] Union-sum complete"
         fi
         
         echo "[GEP2] Generating histogram"
-        meryl histogram {output.meryl_db} | sed 's/\\t/ /g' > {output.hist}
+        meryl histogram merged.meryl | sed 's/\\t/ /g' > merged.hist
+        
+        # Copy results to final location
+        echo "[GEP2] Copying results to final location"
+        mkdir -p $(dirname {output.meryl_db})
+        rm -rf {output.meryl_db}
+        cp -r merged.meryl {output.meryl_db}
+        cp merged.hist {output.hist}
         
         echo "[GEP2] ✅ Assembly k-mer database complete"
         """
 
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# RULES - GenomeScope2 (now at assembly level)
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
+# RULES - GenomeScope2
+# -------------------------------------------------------------------------------
 
 rule C01_run_genomescope2:
     """Run GenomeScope2 analysis on assembly-specific k-mer histogram."""
@@ -379,9 +338,9 @@ rule C01_run_genomescope2:
         """
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES - Merqury
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule C02_run_merqury:
     """Run Merqury for assembly QV and completeness analysis."""
@@ -427,8 +386,10 @@ rule C02_run_merqury:
         
         mkdir -p {params.outdir}
         
-        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_merqury_{wildcards.species}_{wildcards.asm_id}_XXXXXX")"
+        WORK_DIR="$(gep2_get_workdir 50)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_merqury_{wildcards.species}_{wildcards.asm_id}_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
+
         cd $TEMP_DIR
         
         ln -sf {input.meryl_db} read_db.meryl
@@ -509,4 +470,188 @@ rule C02_run_merqury:
         cat {output.qv}
         echo "=== Completeness Summary ==="
         cat {output.completeness}
+        """
+
+# -------------------------------------------------------------------------------
+# RULES - Reads-Only Genome Profiling
+# -------------------------------------------------------------------------------
+
+def get_reads_only_kmer_db_inputs(wildcards):
+    """Get per-read k-mer DBs for reads-only genome profiling."""
+    kmer_len = wildcards.kmer_len
+    read_type = wildcards.read_type
+    species = wildcards.species
+    
+    inputs = []
+    
+    try:
+        for asm_id, asm_data in samples_config["sp_name"][species]["asm_id"].items():
+            if not _is_reads_only_entry(species, asm_id):
+                continue
+            
+            read_type_dict = asm_data.get("read_type", {})
+            
+            for rt_key, rt_data in read_type_dict.items():
+                if normalize_read_type(rt_key) != read_type:
+                    continue
+                
+                read_files = rt_data.get("read_files", {})
+                
+                for path_key, path_value in sorted(read_files.items()):
+                    if not path_value or path_value == "None":
+                        continue
+                    
+                    # Extract base name
+                    basename = os.path.basename(str(path_value))
+                    base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', basename, flags=re.IGNORECASE)
+                    base = base.replace(".fq.gz", "").replace(".fastq.gz", "")
+                    base = base.replace("_1", "").replace("_2", "")
+                    base = base.replace("_filtered", "").replace("_corrected", "").replace("_trimmed", "")
+                    
+                    db_path = os.path.join(
+                        config["OUT_FOLDER"], "GEP2_results", "data", species,
+                        "reads", read_type, f"kmer_db_k{kmer_len}", f"{base}.meryl"
+                    )
+                    
+                    if db_path not in inputs:
+                        inputs.append(db_path)
+                        
+    except (KeyError, TypeError, AttributeError):
+        pass
+    
+    return inputs
+
+
+rule C10_merge_reads_only_kmer_db:
+    """Merge k-mer databases for reads-only genome profiling."""
+    input:
+        dbs = get_reads_only_kmer_db_inputs
+    output:
+        meryl_db = directory(os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "{read_type}", "k{kmer_len}", "{species}.meryl"
+        )),
+        hist = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "{read_type}", "k{kmer_len}", "{species}.hist"
+        )
+    params:
+        outdir = lambda w: os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", w.species,
+            "reads", w.read_type, f"k{w.kmer_len}"
+        ),
+        db_list = lambda w, input: " ".join(input.dbs)
+    threads: cpu_func("kmer_count")
+    resources:
+        mem_mb = mem_func("kmer_count"),
+        runtime = time_func("kmer_count")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "{read_type}", "logs",
+            "C10_merge_reads_only_kmer_db_k{kmer_len}.log"
+        )
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
+        
+        echo "[GEP2] Merging k-mer databases for reads-only profiling: {wildcards.species}"
+        echo "[GEP2] Read type: {wildcards.read_type}"
+        echo "[GEP2] K-mer length: {wildcards.kmer_len}"
+        echo "[GEP2] Input databases: {params.db_list}"
+        
+        WORK_DIR="$(gep2_get_workdir 100)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_reads_only_kmer_{wildcards.species}_{wildcards.read_type}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+        
+        cd "$TEMP_DIR"
+        
+        DB_COUNT=$(echo "{params.db_list}" | wc -w)
+        
+        if [ "$DB_COUNT" -eq 1 ]; then
+            echo "[GEP2] Single database - copying"
+            cp -r {params.db_list} merged.meryl
+        else
+            echo "[GEP2] Multiple databases - merging with union-sum"
+            meryl k={wildcards.kmer_len} \
+                threads={threads} \
+                union-sum \
+                output merged.meryl \
+                {params.db_list}
+        fi
+        
+        echo "[GEP2] Generating histogram"
+        meryl histogram merged.meryl | sed 's/\\t/ /g' > merged.hist
+        
+        # Copy results to final location
+        echo "[GEP2] Copying results to final location"
+        mkdir -p {params.outdir}
+        rm -rf {output.meryl_db}
+        cp -r merged.meryl {output.meryl_db}
+        cp merged.hist {output.hist}
+        
+        echo "[GEP2] ✅ Reads-only k-mer database complete"
+        """
+
+
+rule C11_reads_only_genomescope2:
+    """Run GenomeScope2 for reads-only genome profiling."""
+    input:
+        hist = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "{read_type}", "k{kmer_len}", "{species}.hist"
+        )
+    output:
+        summary = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "{read_type}", "k{kmer_len}", "genomescope2",
+            "{species}_summary.txt"
+        ),
+        model = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "{read_type}", "k{kmer_len}", "genomescope2",
+            "{species}_model.txt"
+        ),
+        linear_plot = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "{read_type}", "k{kmer_len}", "genomescope2",
+            "{species}_linear_plot.png"
+        )
+    params:
+        outdir = lambda w: os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", w.species,
+            "reads", w.read_type, f"k{w.kmer_len}", "genomescope2"
+        ),
+        ploidy = config.get("PLOIDY", 2)
+    threads: cpu_func("genomescope")
+    resources:
+        mem_mb = mem_func("genomescope"),
+        runtime = time_func("genomescope")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "{read_type}", "logs",
+            "C11_reads_only_genomescope2_k{kmer_len}.log"
+        )
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
+        
+        echo "[GEP2] Running GenomeScope2 for reads-only profiling: {wildcards.species}"
+        echo "[GEP2] K-mer length: {wildcards.kmer_len}"
+        echo "[GEP2] Ploidy: {params.ploidy}"
+        
+        mkdir -p {params.outdir}
+        
+        genomescope2 -i {input.hist} \
+                     -o {params.outdir} \
+                     -k {wildcards.kmer_len} \
+                     -p {params.ploidy} \
+                     -n {wildcards.species}
+        
+        echo "[GEP2] ✅ GenomeScope2 complete"
         """

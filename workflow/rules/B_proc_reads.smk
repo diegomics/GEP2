@@ -1,6 +1,6 @@
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # GEP2 - Read Processing Rules
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 # Note: The following are defined in the main Snakefile:
 #   - _MISSING_IN: Placeholder for missing input files
@@ -13,9 +13,9 @@
 #   - DOWNLOAD_MANIFEST, DOWNLOAD_MANIFEST_DICT: Download manifest data
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULE ORDER
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 ruleorder: B04_check_uli_primers > B00_centralize_reads
 ruleorder: B05_filter_hifi_adapters > B00_centralize_reads
@@ -25,9 +25,9 @@ ruleorder: B00_centralize_reads > B00_link_long_reads > B01_compress_long_reads
 ruleorder: B00_centralize_reads > B00_link_pe_reads > B01_compress_pe_reads
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # INPUT FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 def _get_source_for_centralized_read(wildcards):
     """Find the source file that needs to be symlinked to the centralized location."""
@@ -269,7 +269,13 @@ def _get_qc_reports_for_multiqc(w):
     species = w.species
     read_type = w.read_type
     read_type_lower = read_type.lower()
-    
+   
+    ## DEBUG
+    #print(f"[DEBUG] _get_qc_reports_for_multiqc called: {species}/{read_type}")
+    #for grp in _enumerate_centralized_groups(species, read_type):
+    #    print(f"[DEBUG]   Group: {grp}")
+    ## END DEBUG
+ 
     reports = []
     report_dir = os.path.join(
         config["OUT_FOLDER"], "GEP2_results", "data", species,
@@ -325,9 +331,9 @@ def _get_qc_reports_for_multiqc(w):
     return reports
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES - Read Centralization
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule B00_centralize_reads:
     """Create symlinks from downloaded_data to centralized data/reads location."""
@@ -367,9 +373,9 @@ rule B00_centralize_reads:
         shell(cmd)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES - Long Reads: Link/Compress
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule B00_link_long_reads:
     """Create symlink for already-compressed long reads."""
@@ -381,7 +387,7 @@ rule B00_link_long_reads:
             "reads", "{read_type}", "{read_type}_Path{idx}_{base}.fq.gz"
         )
     wildcard_constraints:
-        read_type = r"(hifi|ont|hic)",
+        read_type = r"(hifi|ont)",
         idx = r"\d+",
         base = r"[^/]+(?<!_corrected)(?<!_filtered)"
     threads: cpu_func("light_task")
@@ -420,7 +426,7 @@ rule B01_compress_long_reads:
             "reads", "{read_type}", "{read_type}_Path{idx}_{base}.fq.gz"
         )
     wildcard_constraints:
-        read_type = r"(hifi|ont|hic)",
+        read_type = r"(hifi|ont)",
         idx = r"\d+",
         base = r"[^/]+(?<!_corrected)(?<!_filtered)"
     threads: cpu_func("compress_reads")
@@ -449,9 +455,9 @@ rule B01_compress_long_reads:
         shell(cmd)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES - Paired-End Reads: Link/Compress
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule B00_link_pe_reads:
     """Create symlinks for already-compressed PE reads (when TRIM_PE is off)."""
@@ -468,7 +474,7 @@ rule B00_link_pe_reads:
             "reads", "{read_type}", "{read_type}_Path{idx}_{base}_2.fq.gz"
         )
     wildcard_constraints:
-        read_type = r"(illumina|10x)",
+        read_type = r"(illumina|10x|hic)",
         idx = r"\d+",
         base = r"[^/]+(?<!_trimmed)"
     threads: cpu_func("light_task")
@@ -515,7 +521,7 @@ rule B01_compress_pe_reads:
             "reads", "{read_type}", "{read_type}_Path{idx}_{base}_2.fq.gz"
         )
     wildcard_constraints:
-        read_type = r"(illumina|10x)",
+        read_type = r"(illumina|10x|hic)",
         idx = r"\d+",
         base = r"[^/]+(?<!_trimmed)"
     threads: cpu_func("compress_reads")
@@ -547,9 +553,9 @@ rule B01_compress_pe_reads:
         shell(cmd)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES - PE Trimming
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule B02_trim_pe_fastp:
     """Trim and QC paired-end reads with fastp."""
@@ -580,7 +586,7 @@ rule B02_trim_pe_fastp:
             "reads", "{read_type}", "processed", "reports", "{read_type}_Path{idx}_{base}_fastp.html"
         )
     wildcard_constraints:
-        read_type = r"(illumina|10x)",
+        read_type = r"(illumina|10x|hic)",
         idx = r"\d+",
         base = r"[^/]+"
     threads: cpu_func("trim_pe")
@@ -618,9 +624,9 @@ rule B02_trim_pe_fastp:
         """
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES - Long Read Processing
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule B03_ont_correction:
     """Correct ONT reads using Hifiasm (if enabled)."""
@@ -652,7 +658,10 @@ rule B03_ont_correction:
         
         mkdir -p $(dirname {output.corrected}) $(dirname {log})
         
-        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_ont_correct_{wildcards.species}_{wildcards.read_type}_{wildcards.base}_XXXXXX")"
+        WORK_DIR="$(gep2_get_workdir 100)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_ont_correct_{wildcards.species}_{wildcards.read_type}_{wildcards.base}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+
         cd $TEMP_DIR
         
         echo "Starting ONT correction with Hifiasm..." > {log}
@@ -706,8 +715,6 @@ rule B03_ont_correction:
             exit 1
         fi
         
-        cd /
-        rm -rf $TEMP_DIR
         '''
 
 
@@ -743,8 +750,10 @@ rule B04_check_uli_primers:
         
         mkdir -p $(dirname {output.report})
         
-        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_uli_check_XXXXXX")"
+        WORK_DIR="$(gep2_get_workdir 5)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_uli_check_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
+
         cd "$TEMP_DIR"
         
         seqtk sample -s789 {input.reads} 100000 > subset.fq
@@ -813,9 +822,11 @@ rule B05_filter_hifi_adapters:
         
         mkdir -p $(dirname {output.filtered})
         mkdir -p $(dirname {output.report})
-        
-        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_hifi_filter_XXXXXX")"
+
+        WORK_DIR="$(gep2_get_workdir 100)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_hifi_filter_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
+
         cd "$TEMP_DIR"
         
         tot=$(zcat {input.reads} | awk 'NR%4==1' | wc -l)
@@ -855,9 +866,9 @@ EOF
         '''
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES - QC
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule B06_fastqc_pe_reads:
     """Run FastQC on paired-end reads (250k subsample)."""
@@ -875,7 +886,7 @@ rule B06_fastqc_pe_reads:
             "{read_type}_Path{idx}_{base}_{read}_fastqc.zip"
         )
     wildcard_constraints:
-        read_type = r"(illumina|10x)",
+        read_type = r"(illumina|10x|hic)",
         read = r"(1|2)",
         idx = r"\d+",
         base = r"[^/]+"
@@ -897,8 +908,13 @@ rule B06_fastqc_pe_reads:
         
         mkdir -p $(dirname {output.html})
         
-        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_fastqc_XXXXXX")"
+        WORK_DIR="$(gep2_get_workdir 10)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_fastqc_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+
         cd "$TEMP_DIR"
+
+        export _JAVA_OPTIONS="-Xmx$(({resources.mem_mb} * 90 / 100))m"
         
         TEMP_SUB="{wildcards.read_type}_Path{wildcards.idx}_{wildcards.base}_{wildcards.read}.fq"
         seqtk sample -s123 {input.reads} 250000 > $TEMP_SUB
@@ -908,8 +924,6 @@ rule B06_fastqc_pe_reads:
         mv "{wildcards.read_type}_Path{wildcards.idx}_{wildcards.base}_{wildcards.read}_fastqc.html" "{output.html}"
         mv "{wildcards.read_type}_Path{wildcards.idx}_{wildcards.base}_{wildcards.read}_fastqc.zip" "{output.zip}"
         
-        cd /
-        rm -rf "$TEMP_DIR"
         """
 
 
@@ -950,8 +964,13 @@ rule B06_fastqc_long_reads:
         
         mkdir -p $(dirname {output.html})
         
-        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_fastqc_XXXXXX")"
+        WORK_DIR="$(gep2_get_workdir 10)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_fastqc_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+
         cd "$TEMP_DIR"
+
+        export _JAVA_OPTIONS="-Xmx$(({resources.mem_mb} * 90 / 100))m"
         
         TEMP_SUB="{wildcards.read_type}_Path{wildcards.idx}_{wildcards.base}.fq"
         seqtk sample -s123 {input.reads} 250000 > $TEMP_SUB
@@ -961,8 +980,6 @@ rule B06_fastqc_long_reads:
         mv "{wildcards.read_type}_Path{wildcards.idx}_{wildcards.base}_fastqc.html" "{output.html}"
         mv "{wildcards.read_type}_Path{wildcards.idx}_{wildcards.base}_fastqc.zip" "{output.zip}"
         
-        cd /
-        rm -rf "$TEMP_DIR"
         """
 
 
@@ -997,7 +1014,10 @@ rule B07_nanoplot_long_reads:
         
         mkdir -p {output.dir}
         
-        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_nanoplot_XXXXXX")"
+        WORK_DIR="$(gep2_get_workdir 10)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_nanoplot_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+
         cd $TEMP_DIR
         
         seqtk sample -s456 {input.reads} 250000 | gzip -c > subsample.fq.gz
@@ -1015,14 +1035,12 @@ Read length N50:	0
 EOF
         fi
         
-        cd /
-        rm -rf $TEMP_DIR
         """
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES - MultiQC Aggregation
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule B08_aggregate_read_qc:
     """Aggregate all QC reports with MultiQC."""

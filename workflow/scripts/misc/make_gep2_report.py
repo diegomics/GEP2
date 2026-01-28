@@ -320,16 +320,19 @@ def find_merqury_plots(merqury_dir, asm_id):
     
     for cn_file in cn_files:
         basename = os.path.basename(cn_file)
-        # Check if it's a per-assembly plot (contains .asm1. or .asm2. or similar)
-        # or the combined plot (just {prefix}.spectra-cn.fl.png)
-        if basename.count('.') > 3:
-            # Per-assembly plot: {prefix}.{asm_name}.spectra-cn.fl.png
+        
+        # FIX: Use Regex instead of dot counting.
+        # This correctly handles prefixes with dots (e.g., gfArmOsto1.1)
+        # It looks for .asmX. or .hapX. or _asmX_ tags.
+        if re.search(r'[\._](asm|hap)\d+[\._]', basename):
+            # It has a tag -> Per-assembly plot
             plots['spectra_cn'].append(cn_file)
         else:
-            # Combined plot: {prefix}.spectra-cn.fl.png
+            # No tag -> Combined plot
             plots['spectra_cn_combined'] = cn_file
     
     # For haploid, the only spectra-cn is the "combined" one, move it to spectra_cn list
+    # (Because in haploid mode, the 'combined' plot IS the assembly plot)
     if not plots['spectra_cn'] and plots['spectra_cn_combined']:
         plots['spectra_cn'].append(plots['spectra_cn_combined'])
         plots['spectra_cn_combined'] = None
@@ -452,7 +455,7 @@ def format_number(value):
 def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, 
                    merqury_qv_values, merqury_completeness_values,
                    haploid_number, haploid_source, genomescope_plot, 
-                   merqury_plots, output_file):
+                   merqury_plots, hic_files, output_file):
     """Generate the markdown report supporting 1 or 2 assemblies."""
     
     num_assemblies = len(gfastats_list)
@@ -623,9 +626,9 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list,
     
     # Prepare haploid number information
     if haploid_number is not None:
-        haploid_info = f"‡ = Haploid number is {haploid_number} ({haploid_source}, [GoaT](https://goat.genomehubs.org))"
+        haploid_info = f"‡ = Haploid number is {haploid_number} ({haploid_source}, [GoaT](https://goat.genomehubs.org))<br>"
     else:
-        haploid_info = "‡ = Haploid number not found on [GoaT](https://goat.genomehubs.org)"
+        haploid_info = "‡ = Haploid number not found on [GoaT](https://goat.genomehubs.org)<br>"
     
     # Build the complete report
     report_lines = [
@@ -643,9 +646,9 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list,
     report_lines.append("")
     
     if has_compleasm:
-        report_lines.append("e = eukaryota (odb12)")
+        report_lines.append("e = eukaryota (odb12)<br>")
         if other_lineage:
-            report_lines.append(f"x = {other_lineage}")
+            report_lines.append(f"x = {other_lineage}<br>")
     
     report_lines.append(haploid_info)
     
@@ -708,6 +711,37 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list,
                     "",
                 ])
     
+    # Add Hi-C Contact Maps section
+    if hic_files:
+        # Filter to ensure files actually exist
+        valid_hic_files = [f for f in hic_files if os.path.exists(f)]
+        
+        if valid_hic_files:
+            report_dir = os.path.dirname(os.path.abspath(output_file))
+            
+            report_lines.extend([
+                "",
+                "---",
+                "### Hi-C Contact Maps",
+            ])
+            
+            for i, hic_plot in enumerate(valid_hic_files):
+                rel_path = os.path.relpath(hic_plot, report_dir)
+                
+                # Determine label: use "asmX" if multiple files, otherwise generic "Assembly"
+                if len(valid_hic_files) > 1:
+                    label = f"asm{i+1}"
+                else:
+                    label = "Assembly"
+                
+                report_lines.extend([
+                    "",
+                    f"#### {label}",
+                    f"![Hi-C Map - {label}]({rel_path})",
+                ])
+
+
+
     # Footer
     report_lines.extend([
         "",
@@ -756,10 +790,12 @@ Examples:
                        help='Merqury QV file (*.qv)')
     parser.add_argument('-m', '--merqury-completeness', required=False,
                        help='Merqury completeness file (*.completeness.stats)')
+    parser.add_argument('--merqury-dir', required=False,
+                       help='Merqury output directory (for finding plots)')    
     parser.add_argument('--genomescope-plot', required=False,
                        help='GenomeScope2 linear plot PNG')
-    parser.add_argument('--merqury-dir', required=False,
-                       help='Merqury output directory (for finding plots)')
+    parser.add_argument('--hic', required=False, nargs='+', default=[],
+                       help='Hi-C contact-map png file(s) - one per assembly')
     parser.add_argument('--also-pdf', action='store_true',
                        help='Also generate PDF (requires pandoc and weasyprint)')
     parser.add_argument('-o', '--output', required=True, 
@@ -845,6 +881,7 @@ Examples:
             haploid_source, 
             args.genomescope_plot,
             merqury_plots,
+            args.hic,
             args.output
         )
         

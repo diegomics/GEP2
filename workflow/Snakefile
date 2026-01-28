@@ -1,8 +1,11 @@
 # GEP2 - Genome Evaluation Pipeline 2
+GEP2_VER = "0.2.0-beta"
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# Debug verbosity (set to True for detailed DAG building messages)
+VERBOSE = False
+# -------------------------------------------------------------------------------
 # IMPORTS
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 import os
 import sys
@@ -19,9 +22,9 @@ from urllib.parse import urlparse, unquote
 from pathlib import Path
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # CONSTANTS & PATHS
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 BASEDIR = Path(workflow.basedir)
 ROOT = BASEDIR.parent
@@ -38,9 +41,14 @@ BUSCO_DB_DIR = os.path.join(ROOT, "busco_lineages")
 _MISSING_IN = None  # Will be set after out_folder is defined
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # UTILITIES (pure functions, no dependencies on config)
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
+
+def _debug_print(msg):
+    """Print debug message only if VERBOSE is enabled."""
+    if VERBOSE:
+        print(msg)
 
 def is_main_process():
     """Check if we're the main Snakemake process (not a SLURM worker)"""
@@ -196,9 +204,57 @@ def _should_skip_analysis(species, asm_id, analysis_type):
     return skip_config in ("on", "true", "yes", "1")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+def _is_reads_only_entry(species, asm_id):
+    """Check if this is a reads-only entry (no assembly, just reads for profiling)."""
+    if asm_id is None or str(asm_id).lower() in ("none", "", "-"):
+        return True
+    
+    try:
+        asm_data = samples_config["sp_name"][species]["asm_id"].get(asm_id, {})
+        asm_files = asm_data.get("asm_files", {})
+        
+        # Check if all asm_files are None/empty
+        has_assembly = False
+        for path_key, path_value in asm_files.items():
+            if path_value and str(path_value).lower() not in ("none", "", "-"):
+                has_assembly = True
+                break
+        
+        return not has_assembly
+        
+    except (KeyError, TypeError, AttributeError):
+        return True
+
+
+def get_reads_only_species():
+    """Get list of species that have reads-only entries (no assemblies)."""
+    reads_only = []
+    
+    for species, sp_data in samples_config.get("sp_name", {}).items():
+        for asm_id, asm_data in sp_data.get("asm_id", {}).items():
+            if not _is_reads_only_entry(species, asm_id):
+                continue
+            
+            # Check if has reads
+            read_type_dict = asm_data.get("read_type", {})
+            for read_type, rt_data in read_type_dict.items():
+                if not read_type or read_type == "None" or not rt_data:
+                    continue
+                
+                read_files = rt_data.get("read_files", {})
+                if any(v and v != "None" for v in read_files.values()):
+                    reads_only.append({
+                        "species": species,
+                        "read_type": normalize_read_type(read_type)
+                    })
+                    break  # Only need highest priority, handled later
+    
+    return reads_only
+
+
+# -------------------------------------------------------------------------------
 # CONFIG LOADING
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 IS_MAIN = is_main_process()
 
@@ -252,31 +308,17 @@ if os.path.exists(manifest_path):
                 DOWNLOAD_MANIFEST_DICT[entry["destination"]] = entry
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # TEMP DIRECTORY LOGIC
-# ═══════════════════════════════════════════════════════════════════════════════
-# Two temp directories:
-#   TEMP_DIR (GEP2_TMP)      - general purpose temp (local SSD preferred)
-#   FAST_TEMP_DIR (GEP2_FAST_TMP) - for I/O intensive operations (RAM preferred)
+# -------------------------------------------------------------------------------
+# TEMP_DIR options:
+#   "default" or "" → OUT_FOLDER/GEP2_results/tmp
+#   "auto" → detect from profile's apptainer-args, check space at runtime, fall back
+#   "{path}" → use that path
 #
-# Default behavior: Use OUT_FOLDER/GEP2_results/tmp but show hints about better options
-# Custom path: Use that path directly
-
-def _detect_local_temp_options():
-    """Detect available local temp directories (SSDs, local disks)"""
-    candidates = ["/localscratch", "/local", "/scratch", "/tmp"]
-    options = []
-    for path in candidates:
-        try:
-            if os.path.isdir(path) and os.access(path, os.W_OK):
-                st = os.statvfs(path)
-                free_gb = st.f_bavail * st.f_frsize / (1024**3)
-                if free_gb > 5:  # Only show if >5GB free
-                    options.append((path, "local", free_gb))
-        except:
-            pass
-    return options
-
+# FAST_TEMP_DIR options:
+#   "default" or "" → same as TEMP_DIR (shows hints for faster options)
+#   "{path}" → use that path
 
 def _detect_ramfs_mounts():
     """Detect RAM-mounted filesystems"""
@@ -291,77 +333,212 @@ def _detect_ramfs_mounts():
                         try:
                             st = os.statvfs(mnt)
                             free_gb = st.f_bavail * st.f_frsize / (1024**3)
-                            if free_gb > 10:  # Only show if >10GB free
-                                mounts.append((mnt, fstype, free_gb))
                         except:
-                            pass
+                            free_gb = None
+                        mounts.append((mnt, fstype, free_gb))
     except:
         pass
     return mounts
 
 
-# Default temp directory under results folder
-OUT_TMP = os.path.join(config["OUT_FOLDER"], "GEP2_results", "tmp")
-os.makedirs(OUT_TMP, exist_ok=True)
+def _parse_fast_paths_from_profiles():
+    """
+    Parse apptainer-args from execution profiles to find local temp paths.
+    Returns a list of paths in priority order (localscratch > local > home).
+    Appends /tmp to each path for organization.
+    """
+    profile_paths = [
+        BASEDIR.parent / "execution" / "slurm" / "config.yaml",
+        BASEDIR.parent / "execution" / "local" / "config.yaml",
+    ]
+    
+    # Priority order: localscratch first, then local, then home
+    fast_keywords_priority = [
+        ("/localscratch", 1),
+        ("/local/", 2),
+        ("/home", 3),
+    ]
+    
+    found_paths = []  # List of (priority, path)
+    
+    for profile_path in profile_paths:
+        if not profile_path.exists():
+            continue
+        try:
+            with open(profile_path) as f:
+                profile_config = yaml.safe_load(f) or {}
+            
+            # Look for apptainer-args or singularity-args
+            apptainer_args = profile_config.get("apptainer-args", "") or profile_config.get("singularity-args", "")
+            
+            if not apptainer_args:
+                continue
+            
+            # Parse --bind arguments: --bind /path:/path or --bind /path
+            bind_matches = re.findall(r'--bind\s+([^\s]+)', apptainer_args)
+            
+            for bind_arg in bind_matches:
+                # Handle both /path:/path and /path formats
+                source_path = bind_arg.split(":")[0]
+                
+                # Check if this path matches our fast keywords
+                for keyword, priority in fast_keywords_priority:
+                    if keyword in source_path:
+                        # Add /tmp subdirectory for organization
+                        tmp_path = os.path.join(source_path, "tmp")
+                        # Avoid duplicates
+                        if tmp_path not in [p[1] for p in found_paths]:
+                            found_paths.append((priority, tmp_path))
+                            print(f"[GEP2] Found local temp candidate from profile: {tmp_path} (priority {priority})")
+                        break
+                        
+        except Exception as e:
+            print(f"[GEP2] Warning: Could not parse {profile_path}: {e}")
+            continue
+    
+    # Sort by priority and return just the paths
+    found_paths.sort(key=lambda x: x[0])
+    return [p[1] for p in found_paths]
+
+
+# Default fallback is always available
+FALLBACK_TMP = os.path.join(config["OUT_FOLDER"], "GEP2_results", "tmp")
+os.makedirs(FALLBACK_TMP, exist_ok=True)
 
 # --- Parse TEMP_DIR config ---
 _temp_dir_raw = str(config.get("TEMP_DIR", "")).strip().lower()
 
-if _temp_dir_raw in ("", "auto"):
-    TEMP_DIR = OUT_TMP
-    local_options = _detect_local_temp_options()
-    if local_options:
-        print(f"[GEP2] TEMP_DIR → {TEMP_DIR} (default)")
-        print(f"[GEP2] ⚡ Local temp directories detected - consider setting TEMP_DIR for better performance:")
-        for path, typ, free_gb in local_options:
-            print(f"       - {path} [{typ}] ~{free_gb:.1f} GiB free")
+if _temp_dir_raw in ("", "default"):
+    TEMP_DIR = FALLBACK_TMP
+    TEMP_DIR_CANDIDATES = [FALLBACK_TMP]
+    print(f"[GEP2] TEMP_DIR → {TEMP_DIR}")
+elif _temp_dir_raw == "auto":
+    # Try to detect from profile's apptainer-args
+    detected_paths = _parse_fast_paths_from_profiles()
+    if detected_paths:
+        TEMP_DIR = detected_paths[0]  # Primary choice
+        TEMP_DIR_CANDIDATES = detected_paths + [FALLBACK_TMP]  # All options including fallback
+        print(f"[GEP2] TEMP_DIR → {TEMP_DIR} (auto, with {len(detected_paths)} fast option(s))")
+        print(f"[GEP2] Fallback chain: {' → '.join(TEMP_DIR_CANDIDATES)}")
     else:
-        print(f"[GEP2] TEMP_DIR → {TEMP_DIR}")
+        TEMP_DIR = FALLBACK_TMP
+        TEMP_DIR_CANDIDATES = [FALLBACK_TMP]
+        print(f"[GEP2] TEMP_DIR → {TEMP_DIR} (auto, no fast path detected in profiles)")
 else:
-    TEMP_DIR = str(config.get("TEMP_DIR", "")).strip()  # Preserve original case
-    try:
-        os.makedirs(TEMP_DIR, exist_ok=True)
-        print(f"[GEP2] TEMP_DIR → {TEMP_DIR}")
-    except Exception as e:
-        print(f"[GEP2] ⚠️  Could not create TEMP_DIR '{TEMP_DIR}': {e}")
-        print(f"[GEP2] Falling back to {OUT_TMP}")
-        TEMP_DIR = OUT_TMP
+    # User-specified path - also add /tmp subdirectory
+    user_path = str(config.get("TEMP_DIR", "")).strip()
+    if not user_path.endswith("/tmp"):
+        TEMP_DIR = os.path.join(user_path, "tmp")
+    else:
+        TEMP_DIR = user_path
+    TEMP_DIR_CANDIDATES = [TEMP_DIR, FALLBACK_TMP]
+    print(f"[GEP2] TEMP_DIR → {TEMP_DIR}")
 
 # --- Parse FAST_TEMP_DIR config ---
 _fast_temp_raw = str(config.get("FAST_TEMP_DIR", "")).strip().lower()
 
-if _fast_temp_raw in ("", "auto"):
-    FAST_TEMP_DIR = TEMP_DIR  # Fall back to TEMP_DIR
+if _fast_temp_raw in ("", "default"):
+    FAST_TEMP_DIR = TEMP_DIR  # Same as TEMP_DIR by default
+    # Show hints about better options
     ram_options = _detect_ramfs_mounts()
     if ram_options:
-        print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR} (default, same as TEMP_DIR)")
+        print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR}")
         print(f"[GEP2] ⚡ RAM-mounted filesystems detected - consider setting FAST_TEMP_DIR for faster I/O:")
         for mnt, typ, free_gb in ram_options:
-            print(f"       - {mnt} [{typ}] ~{free_gb:.1f} GiB free")
+            if free_gb is not None:
+                print(f"       - {mnt} [{typ}] ~{free_gb:.1f} GiB free")
+            else:
+                print(f"       - {mnt} [{typ}]")
     else:
         print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR}")
 else:
-    FAST_TEMP_DIR = str(config.get("FAST_TEMP_DIR", "")).strip()  # Preserve original case
-    try:
-        os.makedirs(FAST_TEMP_DIR, exist_ok=True)
-        print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR}")
-    except Exception as e:
-        print(f"[GEP2] ⚠️  Could not create FAST_TEMP_DIR '{FAST_TEMP_DIR}': {e}")
-        print(f"[GEP2] Falling back to TEMP_DIR: {TEMP_DIR}")
-        FAST_TEMP_DIR = TEMP_DIR
+    # User-specified path - also add /tmp subdirectory
+    user_fast_path = str(config.get("FAST_TEMP_DIR", "")).strip()
+    if not user_fast_path.endswith("/tmp"):
+        FAST_TEMP_DIR = os.path.join(user_fast_path, "tmp")
+    else:
+        FAST_TEMP_DIR = user_fast_path
+    print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR}")
 
-# Export environment variables for all shell commands
+
+# Build the candidates list as a colon-separated string for shell
+TEMP_CANDIDATES_STR = ":".join(TEMP_DIR_CANDIDATES)
+
+# Export for every shell step (works inside Apptainer too)
+# Include a helper function for runtime space checking with multiple fallbacks
 shell.prefix(
     f"set -euo pipefail; "
     f"export TMPDIR='{TEMP_DIR}'; "
     f"export GEP2_TMP='{TEMP_DIR}'; "
     f"export GEP2_FAST_TMP='{FAST_TEMP_DIR}'; "
+    f"export GEP2_FALLBACK_TMP='{FALLBACK_TMP}'; "
+    f"export GEP2_TMP_CANDIDATES='{TEMP_CANDIDATES_STR}'; "
+    # Function to get work dir with space check and multiple fallbacks
+    """
+gep2_get_workdir() {{
+    local REQUIRED_GB="${{1:-100}}"
+    local PENALTY_PER_JOB=50  # Subtract 50GB per existing GEP2 temp folder
+    local FALLBACK="${{GEP2_FALLBACK_TMP:-/tmp}}"
+    
+    echo "[GEP2] Temp directory selection:" >&2
+    echo "[GEP2]   Required: ${{REQUIRED_GB}} GB (with ${{PENALTY_PER_JOB}} GB penalty per existing GEP2 job)" >&2
+    
+    # Parse candidates (colon-separated)
+    IFS=':' read -ra CANDIDATES <<< "${{GEP2_TMP_CANDIDATES:-$FALLBACK}}"
+    
+    for CANDIDATE in "${{CANDIDATES[@]}}"; do
+        echo "[GEP2]   Checking: $CANDIDATE" >&2
+        
+        # Check if directory exists or can be created
+        if ! mkdir -p "$CANDIDATE" 2>/dev/null; then
+            echo "[GEP2]     ⚠️  Cannot create/access directory" >&2
+            continue
+        fi
+        
+        # Get available space
+        AVAIL_KB=$(df -k "$CANDIDATE" 2>/dev/null | awk 'NR==2 {{print $4}}' || echo "0")
+        AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+        
+        # Count existing GEP2 temp folders directly in this tmp directory
+        EXISTING_JOBS=0
+        if [ -d "$CANDIDATE" ]; then
+            EXISTING_JOBS=$(find "$CANDIDATE" -maxdepth 1 -type d -name "GEP2_*" 2>/dev/null | wc -l || echo "0")
+        fi
+        
+        # Calculate adjusted available space
+        PENALTY=$((EXISTING_JOBS * PENALTY_PER_JOB))
+        ADJUSTED_GB=$((AVAIL_GB - PENALTY))
+        
+        echo "[GEP2]     Raw available: ${{AVAIL_GB}} GB" >&2
+        if [ "$EXISTING_JOBS" -gt 0 ]; then
+            echo "[GEP2]     Existing GEP2 jobs: $EXISTING_JOBS (penalty: -${{PENALTY}} GB)" >&2
+            echo "[GEP2]     Adjusted available: ${{ADJUSTED_GB}} GB" >&2
+        fi
+        
+        # Check if adjusted space is sufficient
+        if [ "${{ADJUSTED_GB:-0}}" -ge "$REQUIRED_GB" ] 2>/dev/null; then
+            echo "[GEP2] ✅ Using: $CANDIDATE (${{ADJUSTED_GB}} GB effective, ${{AVAIL_GB}} GB raw)" >&2
+            echo "$CANDIDATE"
+            return 0
+        fi
+        
+        echo "[GEP2]     ❌ Insufficient space (${{ADJUSTED_GB}} GB < ${{REQUIRED_GB}} GB required)" >&2
+    done
+    
+    # All candidates exhausted, use fallback anyway with warning
+    mkdir -p "$FALLBACK" 2>/dev/null || true
+    FALLBACK_KB=$(df -k "$FALLBACK" 2>/dev/null | awk 'NR==2 {{print $4}}' || echo "0")
+    FALLBACK_GB=$((FALLBACK_KB / 1024 / 1024))
+    echo "[GEP2] ⚠️  All fast options exhausted, using fallback: $FALLBACK (${{FALLBACK_GB}} GB free)" >&2
+    echo "$FALLBACK"
+}}
+"""
 )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # DATA TABLE HANDLING
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 def download_data_table(url: str, output_dir: Path) -> Path:
     """Download data table from URL with special handling for Google Sheets"""
@@ -423,9 +600,9 @@ else:
 yaml_output = out_folder / "data_config.yaml"
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # YAML PROCESSING FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 def normalize_assembly_files(yaml_data: dict) -> dict:
     """
@@ -564,7 +741,7 @@ def process_yaml_for_downloads(yaml_data: dict, out_folder: Path) -> tuple:
                                 "asm_key": asm_key
                             })
                             queued_downloads[dedup_key] = str(local_path)
-                            print(f"[GEP2] Assembly download queued: {asm_file}")
+                            _debug_print(f"[GEP2] Assembly download queued: {asm_file}")
                         else:
                             local_path = Path(queued_downloads[dedup_key])
                         
@@ -587,7 +764,7 @@ def process_yaml_for_downloads(yaml_data: dict, out_folder: Path) -> tuple:
                                 "asm_key": asm_key
                             })
                             queued_downloads[dedup_key] = str(local_path)
-                            print(f"[GEP2] Assembly download queued: {asm_file}")
+                            _debug_print(f"[GEP2] Assembly download queued: {asm_file}")
                         else:
                             local_path = Path(queued_downloads[dedup_key])
                         
@@ -606,7 +783,7 @@ def process_yaml_for_downloads(yaml_data: dict, out_folder: Path) -> tuple:
                 
                 # Use normalized read type to check if paired-end
                 normalized_rt = normalize_read_type(read_type)
-                is_paired = normalized_rt in ["illumina", "10x"]
+                is_paired = normalized_rt in ["illumina", "10x", "hic"]
                 
                 for path_key, path_value in read_files.items():
                     if not path_value or path_value == "None":
@@ -646,7 +823,7 @@ def process_yaml_for_downloads(yaml_data: dict, out_folder: Path) -> tuple:
                                     "read_type": read_type_lower
                                 })
                                 queued_downloads[dedup_key] = str(local_path)
-                                print(f"[GEP2] Reads download queued: {path}")
+                                _debug_print(f"[GEP2] Reads download queued: {path}")
                             else:
                                 local_path = Path(queued_downloads[dedup_key])
                             
@@ -672,7 +849,7 @@ def process_yaml_for_downloads(yaml_data: dict, out_folder: Path) -> tuple:
                                         "read_type": read_type_lower
                                     })
                                     queued_downloads[dedup_key] = str(base_dir / path)
-                                    print(f"[GEP2] SRA paired reads download queued: {path}")
+                                    _debug_print(f"[GEP2] SRA paired reads download queued: {path}")
                                 
                                 new_paths.extend([str(local_r1), str(local_r2)])
                             else:
@@ -690,7 +867,7 @@ def process_yaml_for_downloads(yaml_data: dict, out_folder: Path) -> tuple:
                                         "read_type": read_type_lower
                                     })
                                     queued_downloads[dedup_key] = str(local_path)
-                                    print(f"[GEP2] SRA reads download queued: {path}")
+                                    _debug_print(f"[GEP2] SRA reads download queued: {path}")
                                 
                                 new_paths.append(str(local_path))
 
@@ -796,7 +973,7 @@ def centralize_reads(yaml_data: dict, out_folder: Path) -> dict:
             central_dir.mkdir(parents=True, exist_ok=True)
             
             # Check if this is paired-end data
-            is_paired = read_type_normalized in ["illumina", "10x"]
+            is_paired = read_type_normalized in ["illumina", "10x", "hic"]
             
             read_idx = len([k for k in read_set_index.values() if read_type_normalized in str(k)]) + 1
             
@@ -872,7 +1049,7 @@ def centralize_reads(yaml_data: dict, out_folder: Path) -> dict:
                 if key in read_set_index:
                     centralized = read_set_index[key]
                     read_type_normalized = normalize_read_type(read_type)
-                    is_paired = read_type_normalized in ["illumina", "10x"]
+                    is_paired = read_type_normalized in ["illumina", "10x", "hic"]
                     
                     new_read_files = {}
                     
@@ -898,9 +1075,9 @@ def centralize_reads(yaml_data: dict, out_folder: Path) -> dict:
     return updated_yaml
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # LOAD SAMPLES CONFIG
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 def load_samples_config():
     """Safely load the samples configuration"""
@@ -997,23 +1174,9 @@ if IS_MAIN:
 samples_config = load_samples_config()
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# TEMP DIR & SHELL PREFIX
-# ═══════════════════════════════════════════════════════════════════════════════
-
-OUT_TMP = os.path.join(config["OUT_FOLDER"], "tmp")
-os.makedirs(OUT_TMP, exist_ok=True)
-
-shell.prefix(
-    f"set -euo pipefail; "
-    f"export TMPDIR='{OUT_TMP}'; "
-    f"export GEP2_TMP='{OUT_TMP}'; "
-)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # BANNER
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 if IS_MAIN:
     banner = r"""
@@ -1026,16 +1189,16 @@ if IS_MAIN:
     """
     print(banner, flush=True)
     print("Genome Evaluation Pipeline 2", flush=True)
-    print("v.0.1.0", flush=True)
+    print(f"v{GEP2_VER}", flush=True)
     print(f"Configuration: {CONFIG_PATH}", flush=True)
     print(f"Output folder: {out_folder}", flush=True)
     print("Pipeline starting NOW!", flush=True)
     print("=" * 60, flush=True)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RESOURCE CALCULATOR
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 if IS_MAIN:
     try:
@@ -1056,12 +1219,12 @@ else:
         time_func = lambda x: 60
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # HELPERS (functions that depend on samples_config)
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 # HELPERS - Assembly Functions
-# ───────────────────────────────────────────────────────────────────────────────
+# -------------------------------------------------------------------------------
 
 def get_assembly_files(species, assembly):
     """Get all assembly files for a given species/assembly"""
@@ -1089,7 +1252,7 @@ def get_assembly_input(wildcards):
 
 
 # HELPERS - Read Type Functions
-# ───────────────────────────────────────────────────────────────────────────────
+# -------------------------------------------------------------------------------
 
 def get_normalized_read_types(species):
     """Get all normalized read types available for a species"""
@@ -1144,7 +1307,7 @@ def get_kmer_length(read_type):
     kmer_len = config.get("KMER_LEN", 31)
     
     if str(kmer_len).lower() == "auto":
-        if read_type.lower() in ["illumina", "10x"]:
+        if read_type.lower() in ["illumina", "10x", "hic"]:
             return 21
         else:
             return 31
@@ -1176,7 +1339,7 @@ def _assembly_has_reads(species, asm_id):
 
 
 # HELPERS - Centralized Reads Functions
-# ───────────────────────────────────────────────────────────────────────────────
+# -------------------------------------------------------------------------------
 
 def _get_centralized_reads_dict(species, read_type):
     """Get centralized read files dictionary for a species/read_type.
@@ -1219,7 +1382,7 @@ def _enumerate_centralized_groups(species, read_type):
         return
     
     read_type_lower = read_type.lower() 
-    is_pe = read_type_lower in ["illumina", "10x"]
+    is_pe = read_type_lower in ["illumina", "10x", "hic"]
     
     for i, key in enumerate(sorted(reads_dict.keys()), 1):
         val = reads_dict[key]
@@ -1383,12 +1546,12 @@ def _get_unique_reads_for_species(species, read_type):
         return set()
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # COLLECTORS (functions that gather expected outputs)
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 # COLLECTORS - Assembly Stats
-# ───────────────────────────────────────────────────────────────────────────────
+# -------------------------------------------------------------------------------
 
 def get_asm_stats_results():
     """Get expected assembly stats outputs, respecting RUN_COMPL flag"""
@@ -1405,6 +1568,10 @@ def get_asm_stats_results():
             
         for assembly, assembly_data in species_data["asm_id"].items():
             if not assembly_data:
+                continue
+            
+            # Skip reads-only entries (no assembly)
+            if _is_reads_only_entry(species, assembly):
                 continue
             
             asm_files = get_assembly_files(species, assembly)
@@ -1427,7 +1594,7 @@ def get_asm_stats_results():
 
 
 # COLLECTORS - Read Processing
-# ───────────────────────────────────────────────────────────────────────────────
+# -------------------------------------------------------------------------------
 
 def get_read_processing_results():
     """Get expected read processing outputs."""
@@ -1473,13 +1640,13 @@ def get_read_processing_results():
                     ))
 
                     if IS_MAIN:
-                        print(f"[GEP2] Read processing for {species}/{read_type_normalized}")
+                        _debug_print(f"[GEP2] Read processing for {species}/{read_type_normalized}")
     
     return expected_files
 
 
 # COLLECTORS - K-mer Analysis
-# ───────────────────────────────────────────────────────────────────────────────
+# -------------------------------------------------------------------------------
 
 def get_kmer_stats_results():
     """Get expected k-mer analysis outputs (per-read DBs and assembly-specific merged DBs)."""
@@ -1490,6 +1657,10 @@ def get_kmer_stats_results():
     
     if not samples_config or "sp_name" not in samples_config:
         return expected_files
+
+    # Get allowed read types from DATA_PRIORITY
+    priority_order = _parse_tech_priority()  # e.g., ["illumina", "hifi", "ont"...]
+    merge_tech = _as_bool(config.get("MERGE_TECH", False))
     
     # Track which per-read k-mer DBs we need (deduplicated)
     per_read_dbs = {}  # (species, read_type, base) -> kmer_len
@@ -1500,6 +1671,10 @@ def get_kmer_stats_results():
         
         for asm_id, asm_data in species_data["asm_id"].items():
             if not asm_data:
+                continue
+
+            # Skip reads-only entries (no assembly)
+            if _is_reads_only_entry(species, asm_id):
                 continue
             
             asm_files = get_assembly_files(species, asm_id)
@@ -1514,13 +1689,24 @@ def get_kmer_stats_results():
                     print(f"[GEP2] No reads for {species}/{asm_id}, skipping k-mer analysis")
                 continue
             
+            # Skip if priority read type is not in DATA_PRIORITY
+            if read_type not in priority_order:
+                if IS_MAIN:
+                    print(f"[GEP2] Read type '{read_type}' not in DATA_PRIORITY, skipping k-mer for {species}/{asm_id}")
+                continue
+
             kmer_len = get_kmer_length(read_type)
             read_type_lower = read_type.lower()
             
             # Collect per-read DBs needed for this assembly
+            # Only include reads from allowed technologies
             reads_for_asm = _get_reads_for_assembly(species, asm_id)
             
             for r in reads_for_asm:
+                # Skip read types not in priority list
+                if r["read_type"] not in priority_order:
+                    continue
+                    
                 key = (species, r["read_type"], r["base"])
                 if key not in per_read_dbs:
                     per_read_dbs[key] = kmer_len
@@ -1545,7 +1731,7 @@ def get_kmer_stats_results():
             ])
             
             if IS_MAIN:
-                print(f"[GEP2] K-mer analysis for {species}/{asm_id}: using {read_type} reads (k={kmer_len})")
+                _debug_print(f"[GEP2] K-mer analysis for {species}/{asm_id}: using {read_type} reads (k={kmer_len})")
             
             # Merqury outputs
             asm_count = len([v for v in asm_files.values() if v and v != "None"])
@@ -1561,7 +1747,7 @@ def get_kmer_stats_results():
             ])
             
             if IS_MAIN:
-                print(f"[GEP2] Merqury for {species}/{asm_id}: {mode} mode ({asm_count} asm files)")
+                _debug_print(f"[GEP2] Merqury for {species}/{asm_id}: {mode} mode ({asm_count} asm files)")
     
     # Add per-read k-mer DB outputs (deduplicated)
     for (species, read_type, base), kmer_len in per_read_dbs.items():
@@ -1648,8 +1834,62 @@ def _get_reads_for_assembly(species, asm_id):
         return []
 
 
+# COLLECTORS - Reads-Only Genome Profiling
+# -------------------------------------------------------------------------------
+
+def get_reads_only_profiling_results():
+    """Collect outputs for reads-only genome profiling (no assembly)."""
+    results = []
+    
+    # Check global toggle
+    if not _as_bool(config.get("KMER_STATS", True)):
+        return results
+    
+    # Get k-mer length based on priority
+    priority_order = config.get("DATA_PRIORITY", "hifi>illumina>ont>hic").lower().split(">")
+    
+    for species, sp_data in samples_config.get("sp_name", {}).items():
+        for asm_id, asm_data in sp_data.get("asm_id", {}).items():
+            # Only process reads-only entries
+            if not _is_reads_only_entry(species, asm_id):
+                continue
+            
+            # Find highest priority read type with data
+            read_type_dict = asm_data.get("read_type", {})
+            selected_read_type = None
+            
+            for priority_rt in priority_order:
+                for rt_key, rt_data in read_type_dict.items():
+                    if normalize_read_type(rt_key) != priority_rt:
+                        continue
+                    
+                    read_files = rt_data.get("read_files", {})
+                    if any(v and v != "None" for v in read_files.values()):
+                        selected_read_type = priority_rt
+                        break
+                
+                if selected_read_type:
+                    break
+            
+            if not selected_read_type:
+                continue
+            
+            # Get k-mer length for this read type
+            kmer_len = get_kmer_length(selected_read_type)
+            
+            # Add outputs
+            base_dir = os.path.join(
+                config["OUT_FOLDER"], "GEP2_results", "data", species,
+                "reads", selected_read_type, f"k{kmer_len}"
+            )
+            
+            results.append(os.path.join(base_dir, "genomescope2", f"{species}_linear_plot.png"))
+    
+    return results
+
+
 # COLLECTORS - Long Reads Analysis
-# ───────────────────────────────────────────────────────────────────────────────
+# -------------------------------------------------------------------------------
 
 def get_long_reads_analysis_results():
     """Collect all Inspector outputs if enabled and long reads are available."""
@@ -1663,6 +1903,10 @@ def get_long_reads_analysis_results():
         for asm_id, asm_data in sp_data.get("asm_id", {}).items():
             # Check per-assembly skip
             if _should_skip_analysis(species, asm_id, "insp"):
+                continue
+
+            # Skip reads-only entries (no assembly)
+            if _is_reads_only_entry(species, asm_id):
                 continue
             
             # Check for long reads (hifi or ont)
@@ -1701,7 +1945,7 @@ def get_long_reads_analysis_results():
 
 
 # COLLECTORS - Hi-C Analysis
-# ───────────────────────────────────────────────────────────────────────────────
+# -------------------------------------------------------------------------------
 
 def get_hic_analysis_results():
     """Collect all Hi-C analysis outputs if enabled and Hi-C reads are available."""
@@ -1710,12 +1954,24 @@ def get_hic_analysis_results():
     # Check global toggle
     if not _as_bool(config.get("RUN_HIC", True)):
         return results
+
+    # Check if any tracks are enabled
+    tracks_enabled = any([
+        _as_bool(config.get("GAP_TRACK", False)),
+        _as_bool(config.get("TELO_TRACK", False)),
+        _as_bool(config.get("COVER_TRACK", False)),
+        _as_bool(config.get("REP_TRACK", False))
+    ])
     
     for species, sp_data in samples_config.get("sp_name", {}).items():
         for asm_id, asm_data in sp_data.get("asm_id", {}).items():
             # Check per-assembly skip
             if _should_skip_analysis(species, asm_id, "hic"):
                 continue
+
+            # Skip reads-only entries (no assembly)
+            if _is_reads_only_entry(species, asm_id):
+                continue                
             
             # Check for Hi-C reads
             has_hic_reads = False
@@ -1748,9 +2004,13 @@ def get_hic_analysis_results():
                     "hic", asm_basename
                 )
                 
-                # Main outputs
+                # Request tracked version if tracks enabled, otherwise base
+                if tracks_enabled:
+                    results.append(os.path.join(hic_dir, f"{asm_basename}_tracks.pretext"))
+                else:
+                    results.append(os.path.join(hic_dir, f"{asm_basename}.pretext"))
+
                 results.extend([
-                    os.path.join(hic_dir, f"{asm_basename}.pretext"),
                     os.path.join(hic_dir, f"{asm_basename}.mcool"),
                     os.path.join(hic_dir, f"{asm_basename}.pairtools_stats.txt")
                 ])
@@ -1759,7 +2019,7 @@ def get_hic_analysis_results():
 
 
 # COLLECTORS - Reports
-# ───────────────────────────────────────────────────────────────────────────────
+# -------------------------------------------------------------------------------
 
 def get_report_results():
     """Get expected report outputs for all assemblies."""
@@ -1774,6 +2034,9 @@ def get_report_results():
         
         for asm_id, asm_data in species_data["asm_id"].items():
             if not asm_data:
+                continue
+
+            if _is_reads_only_entry(species, asm_id):
                 continue
             
             asm_files = get_assembly_files(species, asm_id)
@@ -1792,9 +2055,9 @@ def get_report_results():
     return expected_files
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # MAIN OUTPUT FUNCTION
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 def get_all_expected_outputs():
     """
@@ -1818,6 +2081,8 @@ def get_all_expected_outputs():
     kmer_stats = _as_bool(config.get("KMER_STATS", True))
     if kmer_stats:
         expected_files.extend(get_kmer_stats_results())
+        # Reads-only genome profiling
+        expected_files.extend(get_reads_only_profiling_results())
     else:
         if IS_MAIN:
             print("[GEP2] KMER_STATS is off - skipping k-mer analysis")
@@ -1829,7 +2094,7 @@ def get_all_expected_outputs():
     else:
         if IS_MAIN:
             print("[GEP2] RUN_INSP is off - skipping Inspector analysis")
-
+    
     # Hi-C analysis (if enabled and Hi-C reads available)
     run_hic = _as_bool(config.get("RUN_HIC", True))
     if run_hic:
@@ -1844,9 +2109,9 @@ def get_all_expected_outputs():
     return expected_files
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # INCLUDE RULE FILES (Includes must be AFTER all helper functions are defined)
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 include: "rules/0_download_data.smk"
 include: "rules/A_asm_stats.smk"
@@ -1857,9 +2122,9 @@ include: "rules/E_hic_analysis.smk"
 include: "rules/Z_reporting.smk"
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # TARGET RULE
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule all:
     input:

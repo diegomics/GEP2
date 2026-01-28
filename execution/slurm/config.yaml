@@ -1,18 +1,33 @@
+# -----------------------------------------------------------------------------
+# Executor & Concurrency
+# -----------------------------------------------------------------------------
 executor: slurm
+
+# Max number of jobs Snakemake will submit to the queue at once.
+# Keep this reasonable (e.g., 100) to avoid annoying the cluster admins.
 jobs: 100
+
+# Rate limits to prevent DDoS-ing the Slurm controller
+max-jobs-per-second: 1
+max-status-checks-per-second: 0.01
+
+# -----------------------------------------------------------------------------
+# Error Handling & Latency
+# -----------------------------------------------------------------------------
+# How many times to restart a job if it fails (0 = fail immediately)
 restart-times: 0
 
-max-jobs-per-second: 10
-max-status-checks-per-second: 1
-seconds-between-status-checks: 60
+# Wait time for the filesystem to catch up after a job finishes (crucial on networked FS)
 latency-wait: 90
+seconds-between-status-checks: 60
 
-rerun-triggers: [mtime] # comment this line to track ALL changes
-printshellcmds: false
 keep-going: true
-software-deployment-method: [apptainer]
-apptainer-args: "--bind /scratch:/scratch"
+printshellcmds: false
+rerun-triggers: [mtime] # comment this line to track ALL changes (code, params, input)
 
+# -----------------------------------------------------------------------------
+# Default Job Resources (Slurm Specifics)
+# -----------------------------------------------------------------------------
 default-resources:
   slurm_account: "agmazzoni"
   slurm_partition: "begendiv,main,scavenger"
@@ -21,12 +36,29 @@ default-resources:
   mem_mb: 2000
   runtime: 60
 
+# -----------------------------------------------------------------------------
+# Software Stack (Apptainer/Singularity)
+# -----------------------------------------------------------------------------
+software-deployment-method: [apptainer]
+
+# IMPORTANT: Bind all necessary paths to read/write here (Scratch, Localscratch, Home, etc.)
+apptainer-args: "--bind /scratch/ddepanis:/scratch/ddepanis --bind /localscratch/ddepanis:/localscratch/ddepanis"
+
+# -----------------------------------------------------------------------------
+# Slurm Plugin Settings
+# -----------------------------------------------------------------------------
 slurm:
+  # Log paths: wildcards are essential here to prevent overwriting
   output: "logs/{rule}/{rule}.{wildcards}.%j.out"
   error: "logs/{rule}/{rule}.{wildcards}.%j.err"
   jobname: "{rule}"
-  ###mail-user: "user@domain.de" # caution, you may get a ton of emails
-  ###mail-type: "FAIL,END" # Options: BEGIN,END,FAIL,REQUEUE,ALL,TIME_LIMIT_90
+
+  # Cluster Email settings
+  ###mail-user: "user@domain.de" 
+  ###mail-type: "FAIL,END" 
+
+  # Commands to run *before* the actual job script (e.g., loading modules)
   script_preamble: |
     module load apptainer
     set -euo pipefail
+

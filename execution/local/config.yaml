@@ -1,8 +1,42 @@
-# Local execution configuration
-cores: 4  # Max cores to use simultaneously
-jobs: 4   # Max parallel jobs
+# -----------------------------------------------------------------------------
+# Global Concurrency Limits
+# -----------------------------------------------------------------------------
+# Maximum number of CPU cores Snakemake can use AT ONCE across ALL jobs.
+cores: 96
 
-# Optional: Resource limits for local execution
-local-cores: 4
-max-threads: 8
+# -----------------------------------------------------------------------------
+# Machine Protection (Global Resource Limits)
+# -----------------------------------------------------------------------------
+# These limits prevent Snakemake from spawning too many large-memory jobs 
+# that would crash your workstation, even if you have enough free CPU cores.
+resources:
+  mem_mb: 500000
+
+# -----------------------------------------------------------------------------
+# Default Job Resources
+# -----------------------------------------------------------------------------
+default-resources:
+  mem_mb: 2000
+  threads: 1
+
+# -----------------------------------------------------------------------------
+# Execution Behavior & Latency
+# -----------------------------------------------------------------------------
+keep-going: true
+printshellcmds: false
+
+# Wait time (seconds) for filesystem operations. 
+latency-wait: 60
+
+# Determines what triggers a job rerun. [mtime] checks file modification dates.
+rerun-triggers: [mtime]
+
+# -----------------------------------------------------------------------------
+# Software Stack (Apptainer/Singularity)
+# -----------------------------------------------------------------------------
+software-deployment-method: [apptainer]
+
+# Bind paths for local execution. 
+# IMPORTANT!!! bind here all the folders you use, like "--bind /my/storage:/my/storage --bind /my/folder:/my/folder"
+apptainer-args: ""
 

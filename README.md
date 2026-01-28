@@ -63,8 +63,6 @@ config/control_panel.yaml
 
 ### 5) Configure Cluster or Computer Parameters
 
-**Note:** Local mode has not been fully tested yet.
-
 ```
 GEP2/execution/
 ├── local/
@@ -152,8 +150,21 @@ GEP2_results/
         │       └── {asm_file_name}_summary.txt
         ├── gfastats/
         │   └── {asm_file_name}_stats.txt
+        ├── hic/
+        │   └── {asm_file_name}/
+        │       ├── {asm_file_name}.cool
+        │       ├── {asm_file_name}.mcool
+        │       ├── {asm_file_name}.pairs.gz
+        │       ├── {asm_file_name}.pairtools_stats.txt
+        │       ├── {asm_file_name}.pretext
+        │       ├── {asm_file_name}_tracks.pretext
+        │       ├── {asm_file_name}_snapshots
+        │       │   └── {asm_file_name}_FullMap.png
+        │       └── tracks
+        │           └── ...bedgraph
         ├── inspector/
         │   └── {asm_file_name}/
+        │       ├── ..
         │       └── summary_statistics
         ├── k{k-mer_length}/
         │   ├── {asm_id}.hist
@@ -162,6 +173,9 @@ GEP2_results/
         │       └── {asm_id}_linear_plot.png
         ├── logs/
         └── merqury/
-            └── ...
+            ├── ..
+            ├── {asm_file_name}.completeness.stats
+            ├── {asm_file_name}.qv
+            └── ...png
 ```
 

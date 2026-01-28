@@ -1,6 +1,6 @@
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # GEP2 - Report Generation Rules
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 # Note: The following are defined in the main Snakefile:
 #   - get_assembly_files(): Get assembly files for species/assembly
@@ -10,9 +10,9 @@
 #   - _as_bool(): Convert config value to boolean
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # INPUT FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 def get_report_gfastats_inputs(wildcards):
     """Get all gfastats output files for this assembly."""
@@ -182,6 +182,47 @@ def get_report_hic_inputs(wildcards):
     return results
 
 
+def get_report_hic_snapshots(wildcards):
+    """Get Hi-C snapshot PNGs if available (only when not in high-res mode).
+    
+    Note: These are NOT included as required inputs since PretextSnapshot may fail.
+    The script will check if files exist at runtime.
+    """
+    # Global toggle
+    if not _as_bool(config.get("RUN_HIC", True)):
+        return []
+    
+    # Snapshots are not created in high-res mode
+    if _as_bool(config.get("HIC_HIGH_RES", False)):
+        return []
+    
+    # Per-assembly skip
+    if _should_skip_analysis(wildcards.species, wildcards.asm_id, "hic"):
+        return []
+    
+    # Check for Hi-C reads
+    if not _has_hic_reads_for_assembly(wildcards.species, wildcards.asm_id):
+        return []
+    
+    # Get snapshot PNGs for each assembly file
+    asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
+    results = []
+    
+    for asm_key, asm_path in sorted(asm_files.items()):
+        if not asm_path or asm_path == "None":
+            continue
+        
+        asm_basename = get_assembly_basename(asm_path)
+        snapshot_path = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", wildcards.species,
+            wildcards.asm_id, "hic", asm_basename,
+            f"{asm_basename}_snapshots", f"{asm_basename}_FullMap.png"
+        )
+        results.append(snapshot_path)
+    
+    return results
+
+
 def get_all_report_inputs(wildcards):
     """Collect all inputs for the report rule."""
     inputs = []
@@ -203,12 +244,19 @@ def get_all_report_inputs(wildcards):
     # Inspector if enabled and has long reads
     inputs.extend(get_report_inspector_inputs(wildcards))
     
+    # Hi-C pretext files (but NOT snapshots - those are optional and may not exist)
+    inputs.extend(get_report_hic_inputs(wildcards))
+    
+    # NOTE: Hi-C snapshots are NOT included here as required inputs
+    # because PretextSnapshot can fail. They're passed as params and
+    # checked at runtime in the shell command.
+    
     return inputs
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule Z00_generate_report:
     """Generate final markdown report aggregating all analysis results."""
@@ -234,6 +282,7 @@ rule Z00_generate_report:
         merqury_dir = lambda w: os.path.join(
             config["OUT_FOLDER"], "GEP2_results", w.species, w.asm_id, "merqury"
         ),
+        hic_snapshots = lambda w: get_report_hic_snapshots(w),
         script_path = os.path.join(BASEDIR, "scripts", "misc", "make_gep2_report.py")
     container: CONTAINERS["gep2_base"]
     threads: 1
@@ -247,6 +296,8 @@ rule Z00_generate_report:
         )
     shell:
         """
+        exec > {log} 2>&1
+        
         cmd="python {params.script_path} -s {params.species} -a {params.asm_id} -g {params.gfastats}"
         
         if [ -n "{params.compleasm}" ]; then
@@ -269,8 +320,22 @@ rule Z00_generate_report:
             cmd="$cmd --merqury-dir {params.merqury_dir}"
         fi
         
+        # Hi-C snapshots are optional - only add files that actually exist
+        HIC_SNAPSHOTS=""
+        for snapshot in {params.hic_snapshots}; do
+            if [ -f "$snapshot" ]; then
+                HIC_SNAPSHOTS="$HIC_SNAPSHOTS $snapshot"
+            else
+                echo "[GEP2] ⚠️  Hi-C snapshot not found (skipping): $snapshot"
+            fi
+        done
+        
+        if [ -n "$HIC_SNAPSHOTS" ]; then
+            cmd="$cmd --hic $HIC_SNAPSHOTS"
+        fi
+        
         cmd="$cmd --also-pdf -o {output.report}"
         
-        echo "Command: $cmd" > {log}
-        $cmd >> {log} 2>&1
+        echo "[GEP2] Command: $cmd"
+        $cmd
         """

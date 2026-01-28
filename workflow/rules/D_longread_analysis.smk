@@ -1,6 +1,6 @@
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # GEP2 - Long Read Analysis Rules
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 # Note: The following are defined in the main Snakefile:
 #   - samples_config: Parsed sample configuration
@@ -11,9 +11,9 @@
 #   - _as_bool(): Convert config value to boolean
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # INPUT FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 def _get_long_read_type_for_assembly(species, asm_id):
     """Get the priority long read type available for this assembly.
@@ -133,7 +133,7 @@ def _get_long_reads_for_inspector(species, asm_id, read_type):
 
 
 def get_inspector_asm_input(wildcards):
-    """Get assembly file for Inspector."""
+    """Get specific assembly file for Inspector based on asm_basename."""
     # Global toggle
     if not _as_bool(config.get("RUN_INSP", True)):
         return []
@@ -147,7 +147,27 @@ def get_inspector_asm_input(wildcards):
     if not long_rt:
         return []
     
-    return get_assembly_input(wildcards)
+    # Find the assembly file matching asm_basename
+    asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
+    
+    for asm_key, asm_path in asm_files.items():
+        if not asm_path or asm_path == "None":
+            continue
+        
+        if get_assembly_basename(asm_path) == wildcards.asm_basename:
+            # Check if it needs to be downloaded
+            if is_ncbi_assembly_accession(asm_path) or is_url(asm_path):
+                # Downloaded assembly path
+                return os.path.join(
+                    config["OUT_FOLDER"], "GEP2_results", "downloaded_data",
+                    wildcards.species, "assemblies", 
+                    f"{wildcards.asm_basename}.fna.gz"
+                )
+            else:
+                # Local path
+                return asm_path
+    
+    return []
 
 
 def get_inspector_reads_input(wildcards):
@@ -179,9 +199,9 @@ def get_inspector_datatype(wildcards):
         return "hifi"  # fallback
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule D01_run_inspector:
     """Run Inspector for assembly evaluation using long reads."""
@@ -195,7 +215,7 @@ rule D01_run_inspector:
         ),
         valid_contig = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
-            "inspector", "{asm_basename}", "valid_contig.fa"
+            "inspector", "{asm_basename}", "valid_contig.fa.gz"
         )
     params:
         outdir = lambda w: os.path.join(
@@ -229,23 +249,59 @@ rule D01_run_inspector:
         echo "[GEP2] Reads: {params.reads_str}"
         echo "[GEP2] Datatype: {params.datatype}"
         
-        mkdir -p {params.outdir}
-        
         # Create temp directory
-        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_inspector_{wildcards.species}_{wildcards.asm_basename}_XXXXXX")"
+        WORK_DIR="$(gep2_get_workdir 100)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_inspector_{wildcards.species}_{wildcards.asm_basename}_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
         
         cd "$TEMP_DIR"
         
+        # Run Inspector, output to temp directory
         inspector.py \
             -c {input.asm} \
             -r {params.reads_str} \
-            -o {params.outdir} \
+            -o "$TEMP_DIR/output" \
             --datatype {params.datatype} \
             -t {threads}
         
+        cd output
+
+        # Compress and archive
+        pigz -c -p {threads} valid_contig.fa > valid_contig.fa.gz
+
+        tar -cf ae_merge_workspace.tar ae_merge_workspace/
+        pigz -p {threads} ae_merge_workspace.tar
+
+        tar -cf base_error_workspace.tar base_error_workspace/
+        pigz -p {threads} base_error_workspace.tar
+
+        tar -cf debreak_workspace.tar debreak_workspace/
+        pigz -p {threads} debreak_workspace.tar
+
+        tar -cf map_depth.tar map_depth/
+        pigz -p {threads} map_depth.tar
+
+
+        # Verify
+        pigz -t valid_contig.fa.gz
+        tar -tzf ae_merge_workspace.tar.gz >/dev/null
+        tar -tzf base_error_workspace.tar.gz >/dev/null
+        tar -tzf debreak_workspace.tar.gz >/dev/null
+        tar -tzf map_depth.tar.gz >/dev/null
+
+        # Clean
+        rm valid_contig.fa
+        rm -r ae_merge_workspace
+        rm -r base_error_workspace
+        rm -r debreak_workspace
+        rm -r map_depth
+
+        cd "$TEMP_DIR"
+
+        # Copy results to final location
+        echo "[GEP2] Copying results to {params.outdir}"
+        mkdir -p {params.outdir}
+        cp -r "$TEMP_DIR/output/"* {params.outdir}/
+        
         echo "[GEP2] ✅ Inspector completed successfully"
-        echo ""
-        echo "=== Summary Statistics ==="
-        cat {output.summary}
         """

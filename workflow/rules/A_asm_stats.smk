@@ -1,6 +1,6 @@
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # GEP2 - Assembly Statistics Rules
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 # Note: The following are defined in the main Snakefile:
 #   - BUSCO_DB_DIR: Path to shared BUSCO lineages
@@ -9,9 +9,9 @@
 #   - get_assembly_basename(): Extract basename from filepath
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # RULES
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 rule A00_download_compleasm_db:
     """Download compleasm/BUSCO database (runs only once, stored in pipeline folder)"""
@@ -71,89 +71,103 @@ rule A01_gfastats:
 
 
 rule A02_compleasm:
-    """Assess assembly completeness with compleasm"""
+    """Run compleasm for gene completeness analysis."""
     input:
         asm = get_assembly_input,
         db_flag = os.path.join(BUSCO_DB_DIR, "eukaryota_odb12.done")
     output:
-        summary = "{outdir}/{species}/{assembly}/compleasm/{asm_basename}/{asm_basename}_summary.txt",
-        archive = "{outdir}/{species}/{assembly}/compleasm/{asm_basename}/{asm_basename}_results.tar.gz"
+        summary = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{assembly}",
+            "compleasm", "{asm_basename}", "{asm_basename}_summary.txt"
+        ),
+        archive = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{assembly}",
+            "compleasm", "{asm_basename}", "{asm_basename}_results.tar.gz"
+        )
     params:
-        outdir = lambda w: os.path.join(w.outdir, w.species, w.assembly, "compleasm", w.asm_basename),
-        shared_db = BUSCO_DB_DIR
+        outdir = lambda w: os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", w.species, w.assembly,
+            "compleasm", w.asm_basename
+        ),
+        shared_db = BUSCO_DB_DIR,
+        lineage_arg = lambda w: "--autolineage" if config.get("LINEAGE", "auto").lower() == "auto" else f"-l {config.get('LINEAGE')}"
     threads: cpu_func("compleasm")
     resources:
         mem_mb = mem_func("compleasm"),
         runtime = time_func("compleasm")
     container: CONTAINERS["compleasm"]
     log:
-        "{outdir}/{species}/{assembly}/logs/A02_compleasm_{asm_basename}.log"
+        os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{assembly}",
+            "logs", "A02_compleasm_{asm_basename}.log"
+        )
     benchmark:
-        "{outdir}/{species}/{assembly}/logs/A02_compleasm_{asm_basename}_benchmark.txt"
+        os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{assembly}",
+            "logs", "A02_compleasm_{asm_basename}_benchmark.txt"
+        )
     shell:
-        r'''
+        """
         set -euo pipefail
-        mkdir -p "{params.outdir}" "$(dirname {log})"
+        mkdir -p "$(dirname {log})"
         
         exec > "{log}" 2>&1
         
         echo "[GEP2] Running compleasm on {input.asm}"
+        echo "[GEP2] Lineage setting: {params.lineage_arg}"
         
-        # Set up temp directory
-        BASE="${{GEP2_TMP:-$TMPDIR}}"
-        mkdir -p "$BASE" 2>/dev/null || BASE="$TMPDIR"
+        # Get work directory with space check
+        WORK_DIR="$(gep2_get_workdir 50)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_compleasm_{wildcards.species}_{wildcards.asm_basename}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
         
-        WORKDIR="$(mktemp -d "$BASE/GEP2_compleasm_{wildcards.species}_{wildcards.asm_basename}_XXXXXX")"
-        TMPDB="$WORKDIR/compleasm_db"
+        # Prepare isolated lineage DB in temp
+        TMPDB="$TEMP_DIR/compleasm_db"
         mkdir -p "$TMPDB"
-        
         echo "[GEP2] Preparing isolated lineage DB in $TMPDB"
         cp -rL "{params.shared_db}"/* "$TMPDB/"
         
-        echo "[GEP2] Running compleasm --autolineage --retrocopy"
+        # Run compleasm with output to temp directory
+        TMPOUT="$TEMP_DIR/output"
+        mkdir -p "$TMPOUT"
+        
+        echo "[GEP2] Running compleasm {params.lineage_arg} --retrocopy"
         compleasm run \
             -a "{input.asm}" \
-            -o "{params.outdir}" \
+            -o "$TMPOUT" \
             -t {threads} \
             --library_path "$TMPDB" \
-            --autolineage \
+            {params.lineage_arg} \
             --retrocopy
         
-        echo "[GEP2] Packaging outputs and cleaning directory"
-        TB="{output.archive}"
-        cd "{params.outdir}"
-        rm -f "$TB"
+        echo "[GEP2] Packaging outputs"
+        cd "$TMPOUT"
         
-        # Archive everything except summary.txt and the archive itself
-        # Use tar -czf directly instead of piping to avoid "short read" errors
-        tar -czf "$TB" --exclude='summary.txt' --exclude='*_results.tar.gz' .
+        # Create archive of everything except summary.txt
+        tar -czf results.tar.gz --exclude='summary.txt' .
         
         # Verify archive
-        gzip -t "$TB"
-        tar -tzf "$TB" >/dev/null
+        gzip -t results.tar.gz
+        tar -tzf results.tar.gz >/dev/null
         
         # Handle summary.txt
-        if [ -f "summary.txt" ]; then
-            mv summary.txt "{output.summary}"
-        else
+        if [ ! -f "summary.txt" ]; then
             echo "[GEP2] Warning: summary.txt not found in output"
             FOUND_SUMMARY=$(find . -name "summary.txt" -type f | head -1)
             if [ -n "$FOUND_SUMMARY" ]; then
                 echo "[GEP2] Found summary at: $FOUND_SUMMARY"
-                cp "$FOUND_SUMMARY" "{output.summary}"
+                cp "$FOUND_SUMMARY" summary.txt
             else
                 echo "[GEP2] Creating empty summary file"
-                touch "{output.summary}"
+                touch summary.txt
             fi
         fi
         
-        # Clean up
-        find . -mindepth 1 -maxdepth 1 ! -name '*.txt' ! -name '*_results.tar.gz' -exec rm -rf {{}} \;
+        # Copy results to final location
+        echo "[GEP2] Copying results to {params.outdir}"
+        mkdir -p "{params.outdir}"
+        cp summary.txt "{output.summary}"
+        cp results.tar.gz "{output.archive}"
         
-        echo "[GEP2] Done: archive created at $TB"
-        
-        cd /
-        rm -rf "$WORKDIR"
-        
-        echo "[GEP2] compleasm completed successfully"
-        '''
+        echo "[GEP2] ✅ compleasm completed successfully"
+        """

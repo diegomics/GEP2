@@ -16,14 +16,16 @@ myCPU: 24      # Maximum cores per job (2-24)
 myRAM: 512     # Maximum RAM per job in GB (minimum 4)
 myRUN: 240     # Maximum time per job in HOURS
 
+
 # General purpose temp directory for intermediate files
-## Options: "auto" (uses OUT_FOLDER/tmp, shows hints for faster options)
-## Or specify a path like "/localscratch", "/local", or a local SSD
-TEMP_DIR: "/localscratch"
+## Options: "default" (uses OUT_FOLDER/GEP2_results/tmp), "auto" (will try to get a local SSD
+## from execution/config apptainer-args, falls back to default if <100GB free), or specify a path 
+## "/path/to/dir" to use that particular folder
+TEMP_DIR: "auto"
 
 # Fast temp directory for I/O-intensive operations (e.g., contamination screening)
-## Options: "auto" (falls back to TEMP_DIR, shows hints for RAM-based options)
-## Or specify a fast path like "/dev/shm" or another RAM-mounted filesystem
+## Options: "default" (uses OUT_FOLDER/GEP2_results/tmp and shows hints for RAM-based options),
+## or specify a fast path like "/dev/shm" or another RAM-mounted filesystem
 FAST_TEMP_DIR: "/dev/shm"
 
 ###################################################################################################
@@ -34,6 +36,11 @@ FAST_TEMP_DIR: "/dev/shm"
 
 # Run gene completeness analysis
 RUN_COMPL: on
+
+# BUSCO lineage to use
+## Options: "auto" (searches for best matching lineage in addition to eukaryota), 
+## or specific lineage name (e.g., eukaryota, primates, insecta, fungi, etc)
+LINEAGE: auto
 
 # Use BUSCO instead COMPLEASM 
 PREFER_BUSCO: off # under development
@@ -83,7 +90,7 @@ USE_FASTK: off # under development
 
 # Long reads-based analysis -----------------------------------------------------------------------
 
-# Run Inspector for assembly evaluation using long reads
+# Run Inspector for assembly evaluation using long reads (caution: it's not fast!)
 RUN_INSP: off
 
 # Skip Inspector for assemblies marked with skip=on in the data table
@@ -92,16 +99,32 @@ SKIP_INSP: off
 
 # Hi-C analysis -----------------------------------------------------------------------------------
 
-# Run Hi-C analysis (chromap + PretextMap)
+# Run Hi-C analysis (chromap + cooler + pretextmap)
 RUN_HIC: off
 
 # Skip Hi-C analysis for assemblies marked with skip=on in the data table
 SKIP_HIC: off
 
 # Minimum mapping quality for PretextMap
-HIC_MAPQ: 10
+HIC_MAPQ: 0
 
 # Bin size for cooler (base pairs)
 HIC_BINSIZE: 10000
+
+# High resolution mode for PretextMap (larger files but better detail)
+## If "on" no png snapshot will be created due to a PretextSnapshot issue
+HIC_HIGH_RES: off
+
+# Pretext tracks (requires RUN_HIC: on)
+## Gap/N density track (shows assembly gaps)
+GAP_TRACK: on
+## Long read coverage track (requires long reads, HiFi or ONT)
+COVER_TRACK: on
+## Low complexity tracks (sdust and longdust)
+REP_TRACK: on
+## Telomere repeat density track
+### Options: "auto" (auto-detects motif via GoaT/tidk), off (do not add telomere track),
+### or input the telomere sequence string (e.g. "TTAGGG")
+TELO_TRACK: auto
 
 # Contamination analysis --------------------------------------------------------------------------
