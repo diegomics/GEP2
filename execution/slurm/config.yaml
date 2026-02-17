@@ -41,8 +41,8 @@ default-resources:
 # -----------------------------------------------------------------------------
 software-deployment-method: [apptainer]
 
-# IMPORTANT: Bind all necessary paths to read/write here (Scratch, Localscratch, Home, etc.)
-apptainer-args: "--bind /scratch/ddepanis:/scratch/ddepanis --bind /localscratch/ddepanis:/localscratch/ddepanis"
+# IMPORTANT!!! bind here all the folders you use, like "--bind /my/storage:/my/storage --bind /my/folder:/my/folder"
+apptainer-args: ""
 
 # -----------------------------------------------------------------------------
 # Slurm Plugin Settings
