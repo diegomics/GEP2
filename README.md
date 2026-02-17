@@ -21,7 +21,7 @@ Data is entered via a simple table, and configuration is managed through a tidy 
 
 ### 1) Get the latest version
 
-GEP2 is adding features rapidly, so please download the latest [release](https://github.com/diegomics/GEP2/releases)
+GEP2 is adding features rapidly, so please download the latest [release](https://github.com/diegomics/GEP2/releases) (or clone the repo for getting hot fixes fater!)
 
 ### 2) Create the GEP2 Conda Environment
 
