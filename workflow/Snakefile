@@ -50,14 +50,24 @@ def _debug_print(msg):
     if VERBOSE:
         print(msg)
 
+
 def is_main_process():
-    """Check if we're the main Snakemake process (not a SLURM worker)"""
-    indicators = [
+    """Check if we're the main Snakemake process (not a SLURM worker or local subprocess)"""
+    # 1. Cluster workers: SLURM sets these env vars
+    is_cluster_worker = any([
         os.environ.get("SNAKEMAKE_JOBID"),
         os.environ.get("SNAKEMAKE_SLURM_JOBID"),
         os.environ.get("SLURM_JOB_ID"),
-    ]
-    return not any(indicators)
+    ])
+
+    # 2. Local workers: Snakemake passes "--mode subprocess" to local subprocesses
+    is_local_worker = False
+    for i, arg in enumerate(sys.argv):
+        if arg == "--mode" and i + 1 < len(sys.argv) and sys.argv[i + 1] == "subprocess":
+            is_local_worker = True
+            break
+
+    return not (is_cluster_worker or is_local_worker)
 
 
 def _as_bool(value):
