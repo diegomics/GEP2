@@ -29,67 +29,53 @@ ruleorder: B00_centralize_reads > B00_link_pe_reads > B01_compress_pe_reads
 # INPUT FUNCTIONS
 # -------------------------------------------------------------------------------
 
+# Load centralize map (at module level in B_proc_reads.smk, next to DOWNLOAD_MANIFEST)
+_centralize_map_path = os.path.join(config["OUT_FOLDER"], "GEP2_results", "centralize_map.json")
+if os.path.exists(_centralize_map_path):
+    with open(_centralize_map_path) as f:
+        CENTRALIZE_MAP = json.load(f)
+else:
+    CENTRALIZE_MAP = {}
+
+
 def _get_source_for_centralized_read(wildcards):
     """Find the source file that needs to be symlinked to the centralized location."""
-    filename = wildcards.filename
+    # The centralized path is the output of B00
+    centralized_path = os.path.join(
+        config["OUT_FOLDER"], "GEP2_results", "data",
+        wildcards.species, "reads", wildcards.read_type, wildcards.filename
+    )
+
+    # DEBUG
+    found = centralized_path in CENTRALIZE_MAP
+    print(f"[DEBUG-B00] filename={wildcards.filename} | centralized_path={centralized_path} | in_map={found} | map_size={len(CENTRALIZE_MAP)}", flush=True)
+    if not found and CENTRALIZE_MAP:
+        # Show first key to compare format
+        first_key = next(iter(CENTRALIZE_MAP))
+        print(f"[DEBUG-B00]   example_key={first_key}", flush=True)
     
-    # Extract identifier from filename (e.g., "illumina_Path1_ERR5709830_1.fq.gz" -> "ERR5709830_1")
-    identifier = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', filename, flags=re.IGNORECASE)
+    # Look up the original source
+    if centralized_path in CENTRALIZE_MAP:
+        return CENTRALIZE_MAP[centralized_path]
+    
+    # Fallback for downloads: construct downloaded_data path
+    identifier = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', wildcards.filename, flags=re.IGNORECASE)
     identifier = identifier.replace('.fq.gz', '').replace('.fastq.gz', '')
     
     base_path = os.path.join(
-        config["OUT_FOLDER"], "GEP2_results", "downloaded_data", 
-        wildcards.species, "reads"  # NO assembly folder
+        config["OUT_FOLDER"], "GEP2_results", "downloaded_data",
+        wildcards.species, "reads"
     )
     
-    # Search in downloaded_data (species-level, no assembly folder)
     for rt_variant in [wildcards.read_type, wildcards.read_type.upper(), wildcards.read_type.lower()]:
         for ext in [".fastq.gz", ".fq.gz"]:
             pattern = os.path.join(base_path, rt_variant, f"{identifier}{ext}")
             if os.path.exists(pattern):
                 return pattern
-            # Also try glob for flexibility
-            matches = glob.glob(pattern)
-            if matches:
-                return matches[0]
     
-    # Check original paths in samples_config
-    try:
-        sp_data = samples_config["sp_name"][wildcards.species]
-        for asm_id, asm_data in sp_data["asm_id"].items():
-            read_type_dict = asm_data.get("read_type", {})
-            
-            for read_type, rt_data in read_type_dict.items():
-                if normalize_read_type(read_type) != wildcards.read_type.lower():
-                    continue
-                
-                read_files = rt_data.get("read_files", {})
-                for path_key, path_value in read_files.items():
-                    if not path_value or path_value == "None":
-                        continue
-                    
-                    if isinstance(path_value, str) and "," in path_value:
-                        paths = [p.strip() for p in path_value.split(",")]
-                    elif isinstance(path_value, list):
-                        paths = path_value
-                    else:
-                        paths = [str(path_value)]
-                    
-                    for path in paths:
-                        path_base = os.path.basename(path)
-                        path_id = path_base.replace('.fq.gz', '').replace('.fastq.gz', '').replace('.fq', '').replace('.fastq', '')
-                        
-                        if identifier in path_id or path_id in identifier:
-                            if os.path.exists(path):
-                                return path
-    except (KeyError, TypeError, AttributeError):
-        pass
-    
-    # Fallback: construct expected download path (NO assembly folder)
-    expected_path = os.path.join(
+    return os.path.join(
         base_path, wildcards.read_type.lower(), f"{identifier}.fastq.gz"
     )
-    return expected_path
 
 
 def _linkable_long_src(w):
@@ -100,30 +86,7 @@ def _linkable_long_src(w):
     if not yaml_path.endswith(".gz"):
         return _MISSING_IN
     
-    # Convert centralized path to downloaded path
-    # From: .../data/{species}/reads/{read_type}/hifi_Path1_ERR12205285.fq.gz
-    # To:   .../downloaded_data/{species}/reads/{read_type}/ERR12205285.fastq.gz
-    
-    if "/data/" in yaml_path and "_Path" in os.path.basename(yaml_path):
-        # Extract accession from filename (e.g., hifi_Path1_ERR12205285.fq.gz -> ERR12205285)
-        basename = os.path.basename(yaml_path)
-        # Remove read_type prefix and Path index, and change extension
-        parts = basename.replace(".fq.gz", "").split("_")
-        # Find the accession part (starts with ERR, SRR, DRR, or is the last non-empty part)
-        accession = None
-        for part in parts:
-            if part.startswith(("ERR", "SRR", "DRR")) or (not accession and part and part not in ["hifi", "ont", "hic", "illumina", "10x"]):
-                accession = part
-        
-        if accession:
-            downloaded_path = yaml_path.replace("/data/", "/downloaded_data/")
-            downloaded_path = os.path.join(
-                os.path.dirname(downloaded_path),
-                f"{accession}.fastq.gz"
-            )
-            return downloaded_path
-    
-    return yaml_path
+    return _resolve_centralized_source(yaml_path, w.read_type, w.species)
 
 
 def _compressible_long_src(w):
@@ -142,8 +105,7 @@ def _linkable_pe_r1(w):
     if not yaml_path.endswith(".gz"):
         return _MISSING_IN
     
-    # Convert centralized path to downloaded path
-    return _convert_centralized_to_downloaded(yaml_path, w.read_type)
+    return _resolve_centralized_source(yaml_path, w.read_type, w.species)
 
 
 def _linkable_pe_r2(w):
@@ -156,33 +118,26 @@ def _linkable_pe_r2(w):
     if not yaml_path.endswith(".gz"):
         return _MISSING_IN
     
-    # Convert centralized path to downloaded path
-    return _convert_centralized_to_downloaded(yaml_path, w.read_type)
+    return _resolve_centralized_source(yaml_path, w.read_type, w.species)
 
 
-def _convert_centralized_to_downloaded(yaml_path, read_type):
-    """Convert a centralized data path to the corresponding downloaded_data path."""
+def _resolve_centralized_source(yaml_path, read_type, species):
+    """Given a centralized path under /data/, find the actual source file."""
+    # If it's not a centralized path, return as-is
     if "/data/" not in yaml_path or "_Path" not in os.path.basename(yaml_path):
         return yaml_path
     
+    # Look up in centralize map
+    if yaml_path in CENTRALIZE_MAP:
+        return CENTRALIZE_MAP[yaml_path]
+    
+    # Fallback: assume it was downloaded
     basename = os.path.basename(yaml_path)
-    # Remove read_type prefix and Path index: illumina_Path1_SRR123_1.fq.gz -> SRR123_1
-    parts = basename.replace(".fq.gz", "").replace(".fastq.gz", "").split("_")
+    identifier = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', basename, flags=re.IGNORECASE)
+    identifier = identifier.replace('.fq.gz', '').replace('.fastq.gz', '')
     
-    # Reconstruct accession with pair suffix
-    # e.g., ["illumina", "Path1", "SRR123", "1"] -> "SRR123_1"
-    accession_parts = []
-    skip_next = False
-    for i, part in enumerate(parts):
-        if skip_next:
-            skip_next = False
-            continue
-        if part.lower() in ["hifi", "ont", "hic", "illumina", "10x"]:
-            continue
-        if part.startswith("Path"):
-            continue
-        accession_parts.append(part)
-    
+    parts = identifier.split("_")
+    accession_parts = [p for p in parts if p.lower() not in ["hifi", "ont", "hic", "illumina", "10x"] and not p.startswith("Path")]
     accession = "_".join(accession_parts)
     
     downloaded_path = yaml_path.replace("/data/", "/downloaded_data/")

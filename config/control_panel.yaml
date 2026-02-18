@@ -100,7 +100,7 @@ SKIP_INSP: off
 # Hi-C analysis -----------------------------------------------------------------------------------
 
 # Run Hi-C analysis (chromap + cooler + pretextmap)
-RUN_HIC: off
+RUN_HIC: on
 
 # Skip Hi-C analysis for assemblies marked with skip=on in the data table
 SKIP_HIC: off

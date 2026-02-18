@@ -50,7 +50,6 @@ def _debug_print(msg):
     if VERBOSE:
         print(msg)
 
-
 def is_main_process():
     """Check if we're the main Snakemake process (not a SLURM worker or local subprocess)"""
     # 1. Cluster workers: SLURM sets these env vars
@@ -267,6 +266,10 @@ def get_reads_only_species():
 # -------------------------------------------------------------------------------
 
 IS_MAIN = is_main_process()
+
+# # DEBUG — remove after diagnosis
+# import sys as _sys
+# print(f"[GEP2-DEBUG] IS_MAIN={IS_MAIN} | argv={_sys.argv}", flush=True)
 
 # Import resource calculator
 from misc.resource_calc import ResourceCalculator, create_resource_functions
@@ -901,7 +904,20 @@ def centralize_reads(yaml_data: dict, out_folder: Path) -> dict:
     This avoids redundant processing when the same reads are used with multiple assemblies.
     """
     updated_yaml = copy.deepcopy(yaml_data)
-    
+
+    # Mapping: centralized_path → original_path
+    centralize_map = {}
+
+    # Load existing map to handle re-runs (where YAML already has centralized paths)
+    existing_map_path = out_folder / "centralize_map.json"
+    existing_map = {}
+    if existing_map_path.exists():
+        try:
+            with existing_map_path.open() as f:
+                existing_map = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            existing_map = {}
+
     print("[GEP2] Detecting duplicate read sets for centralization...")
     
     for sp_name, sp_data in yaml_data.get("sp_name", {}).items():
@@ -947,6 +963,9 @@ def centralize_reads(yaml_data: dict, out_folder: Path) -> dict:
                         paths = [path_value]
                     
                     for p in paths:
+                        # If already centralized (from a previous run), resolve to original
+                        if str(p) in existing_map:
+                            p = existing_map[str(p)]
                         sig = get_file_signature(p)
                         if sig:
                             file_signatures.append(sig)
@@ -990,38 +1009,64 @@ def centralize_reads(yaml_data: dict, out_folder: Path) -> dict:
             centralized_paths = []
             path_idx = 1  # Path index for this read set
 
-            for i, (original_path, file_sig) in enumerate(zip(original_paths, read_info["file_signatures"])):
-                original_path = str(original_path)
-                basename, size = file_sig
-                
-                clean_name = os.path.basename(basename)
-                clean_name = re.sub(r'^(hifi|ont|illumina|10x|hic|paired)_Path\d+_', '', clean_name, flags=re.IGNORECASE)
-                
-                for ext in ['.fq.gz', '.fastq.gz', '.fq', '.fastq', '.gz']:
-                    if clean_name.endswith(ext):
-                        clean_name = clean_name[:-len(ext)]
-                
-                # For paired-end reads, the downstream rules add _1/_2 suffixes,
-                # so we need to strip any existing _1/_2 or _R1/_R2 suffixes to avoid duplication
-                if is_paired:
-                    # Strip existing pair indicators - the rules will add _1/_2
-                    if clean_name.endswith('_1') or clean_name.endswith('_2'):
-                        clean_name = clean_name[:-2]  # Remove _1 or _2
-                    elif clean_name.endswith('_R1') or clean_name.endswith('_R2'):
-                        clean_name = clean_name[:-3]  # Remove _R1 or _R2
-                    
-                    # Add the correct suffix based on position (even=_1, odd=_2)
-                    pair_suffix = "_1" if i % 2 == 0 else "_2"
-                    new_filename = f"{read_type_normalized}_Path{path_idx}_{clean_name}{pair_suffix}.fq.gz"
-                else:
+            # # DEBUG
+            # print(f"[DEBUG-CENTRALIZE] {read_type_normalized}: original_paths={original_paths}", flush=True)
+
+            if is_paired:
+                # Process paired reads: iterate in pairs, use shared base name
+                for i in range(0, len(original_paths), 2):
+                    if i + 1 >= len(original_paths):
+                        # Odd file out — treat as single
+                        original_path = str(original_paths[i])
+                        basename_orig, size = read_info["file_signatures"][i]
+                        clean_name = os.path.basename(basename_orig)
+                        clean_name = re.sub(r'^(hifi|ont|illumina|10x|hic|paired)_Path\d+_', '', clean_name, flags=re.IGNORECASE)
+                        for ext in ['.fq.gz', '.fastq.gz', '.fq', '.fastq', '.gz']:
+                            if clean_name.endswith(ext):
+                                clean_name = clean_name[:-len(ext)]
+                        centralized_paths.append(str(central_dir / f"{read_type_normalized}_Path{path_idx}_{clean_name}.fq.gz"))
+                        centralize_map[centralized_paths[-1]] = original_path
+                        path_idx += 1
+                        continue
+
+                    r1_path = str(original_paths[i])
+                    r2_path = str(original_paths[i + 1])
+                    r1_sig = read_info["file_signatures"][i]
+                    r2_sig = read_info["file_signatures"][i + 1]
+
+                    # Derive shared base from R1
+                    clean_name = os.path.basename(r1_sig[0])
+                    clean_name = re.sub(r'^(hifi|ont|illumina|10x|hic|paired)_Path\d+_', '', clean_name, flags=re.IGNORECASE)
+                    for ext in ['.fq.gz', '.fastq.gz', '.fq', '.fastq', '.gz']:
+                        if clean_name.endswith(ext):
+                            clean_name = clean_name[:-len(ext)]
+                    # Strip trailing pair suffix from R1 to get shared base
+                    clean_name = re.sub(r'[_.]?([Rr]?[12])$', '', clean_name)
+
+                    r1_central = str(central_dir / f"{read_type_normalized}_Path{path_idx}_{clean_name}_1.fq.gz")
+                    r2_central = str(central_dir / f"{read_type_normalized}_Path{path_idx}_{clean_name}_2.fq.gz")
+
+                    centralized_paths.append(r1_central)
+                    centralized_paths.append(r2_central)
+                    centralize_map[r1_central] = r1_path
+                    centralize_map[r2_central] = r2_path
+                    path_idx += 1
+            else:
+                # Single-end reads
+                for i, (original_path, file_sig) in enumerate(zip(original_paths, read_info["file_signatures"])):
+                    original_path = str(original_path)
+                    basename_orig, size = file_sig
+
+                    clean_name = os.path.basename(basename_orig)
+                    clean_name = re.sub(r'^(hifi|ont|illumina|10x|hic|paired)_Path\d+_', '', clean_name, flags=re.IGNORECASE)
+                    for ext in ['.fq.gz', '.fastq.gz', '.fq', '.fastq', '.gz']:
+                        if clean_name.endswith(ext):
+                            clean_name = clean_name[:-len(ext)]
+
                     new_filename = f"{read_type_normalized}_Path{path_idx}_{clean_name}.fq.gz"
-                
-                central_path = central_dir / new_filename
-                centralized_paths.append(str(central_path))
-                
-                # For paired reads, increment path_idx every 2 files (after _2)
-                # For single-end, increment after every file
-                if not is_paired or (i % 2 == 1):
+                    central_path = str(central_dir / new_filename)
+                    centralized_paths.append(central_path)
+                    centralize_map[central_path] = original_path
                     path_idx += 1
 
             for asm_id in assemblies:
@@ -1080,6 +1125,12 @@ def centralize_reads(yaml_data: dict, out_folder: Path) -> dict:
                             new_read_files[f"Path{idx}"] = path
                     
                     updated_yaml["sp_name"][sp_name]["asm_id"][asm_id]["read_type"][read_type]["read_files"] = new_read_files
+    
+    # Write centralize map
+    map_path = out_folder / "centralize_map.json"
+    with map_path.open('w') as f:
+        json.dump(centralize_map, f, indent=2)
+    print(f"[GEP2] Centralize map written: {map_path} ({len(centralize_map)} entries)")
     
     print("[GEP2] Read centralization complete")
     return updated_yaml
@@ -1174,7 +1225,14 @@ def load_samples_config():
     with yaml_output.open('w') as f:
         yaml.dump(updated_yaml, f, default_flow_style=False, sort_keys=False)
     print(f"[GEP2] YAML updated with centralized paths")
-    
+   
+    # # DEBUG
+    # if download_manifest:
+    #     for item in download_manifest:
+    #         print(f"[GEP2-DEBUG] manifest item: {item}", flush=True)
+    # else:
+    #     print("[GEP2-DEBUG] download_manifest is EMPTY", flush=True)
+ 
     return updated_yaml
 
 
@@ -1407,7 +1465,14 @@ def _enumerate_centralized_groups(species, read_type):
         if is_pe and len(paths) >= 2:
             r1, r2 = paths[0], paths[1]
             base = os.path.basename(r1).replace("_set1", "").replace("_set2", "")
-            base = base.replace("_1", "").replace("_2", "").replace(".fq.gz", "").replace(".fastq.gz", "")
+            # Remove extension first
+            for ext in ['.fq.gz', '.fastq.gz']:
+                if base.endswith(ext):
+                    base = base[:-len(ext)]
+                    break
+            # Remove ONLY the trailing _1 or _2 pair suffix (not _1 in the middle of names)
+            base = re.sub(r'_[12]$', '', base)
+            # Remove read type prefix
             base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', base, flags=re.IGNORECASE)
             
             yield {
@@ -1445,45 +1510,52 @@ def _pick_centralized_group(w):
 def get_original_read_path(species, read_type, filename):
     """Find the original path for a read file before centralization."""
     read_type_lower = read_type.lower()
-    
+
     try:
         sp_data = samples_config["sp_name"][species]
-        
+
         for asm_id, asm_data in sp_data["asm_id"].items():
-            read_files = asm_data.get("read_files", {})
             
-            for path_key, path_value in read_files.items():
-                if not path_value or path_value == "None":
+            read_type_dict = asm_data.get("read_type", {})
+            
+            for rt_key, rt_data in read_type_dict.items():
+                if normalize_read_type(rt_key) != read_type_lower:
                     continue
                 
-                if isinstance(path_value, str):
-                    if "," in path_value:
-                        paths = [p.strip() for p in path_value.split(",")]
-                    else:
-                        paths = [path_value]
-                elif isinstance(path_value, list):
-                    paths = path_value
-                else:
-                    paths = [str(path_value)]
+                read_files = rt_data.get("read_files", {})
                 
-                for path in paths:
-                    if os.path.basename(path) == filename or path.endswith(f"/{filename}"):
-                        return path
-        
+                for path_key, path_value in read_files.items():
+                    if not path_value or path_value == "None":
+                        continue
+
+                    if isinstance(path_value, str):
+                        if "," in path_value:
+                            paths = [p.strip() for p in path_value.split(",")]
+                        else:
+                            paths = [path_value]
+                    elif isinstance(path_value, list):
+                        paths = path_value
+                    else:
+                        paths = [str(path_value)]
+
+                    for path in paths:
+                        if os.path.basename(path) == filename or path.endswith(f"/{filename}"):
+                            return path
+
         downloaded_path = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "downloaded_data",
             species, "*", "reads", read_type_lower, filename
         )
-        
+
         matches = glob.glob(downloaded_path)
         if matches:
             return matches[0]
-        
+
         return os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "data",
             species, "reads", read_type_lower, filename
         )
-        
+
     except (KeyError, TypeError, AttributeError):
         return os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "data",
