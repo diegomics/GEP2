@@ -39,8 +39,8 @@ RUN_COMPL: on
 
 # BUSCO lineage to use
 ## Options: "auto" (searches for best matching lineage in addition to eukaryota), 
-## or specific lineage name (e.g., eukaryota, primates, insecta, fungi, etc)
-LINEAGE: auto
+## or specific lineage name (e.g., eukaryota, primates, insecta, fungi, etc) 
+LINEAGE: eukaryota
 
 # Use BUSCO instead COMPLEASM 
 PREFER_BUSCO: off # under development
@@ -58,7 +58,7 @@ TRIM_PE: on
 TRIM_HIFI: on
 
 # Correct ONT reads with Hifiasm (caution, may take several hours)
-CORRECT_ONT: on
+CORRECT_ONT: off
 
 
 # K-mer analysis ----------------------------------------------------------------------------------
