@@ -48,11 +48,11 @@ def _get_source_for_centralized_read(wildcards):
 
     # DEBUG
     found = centralized_path in CENTRALIZE_MAP
-    print(f"[DEBUG-B00] filename={wildcards.filename} | centralized_path={centralized_path} | in_map={found} | map_size={len(CENTRALIZE_MAP)}", flush=True)
+    #print(f"[DEBUG-B00] filename={wildcards.filename} | centralized_path={centralized_path} | in_map={found} | map_size={len(CENTRALIZE_MAP)}", flush=True)
     if not found and CENTRALIZE_MAP:
         # Show first key to compare format
         first_key = next(iter(CENTRALIZE_MAP))
-        print(f"[DEBUG-B00]   example_key={first_key}", flush=True)
+        #print(f"[DEBUG-B00]   example_key={first_key}", flush=True)
     
     # Look up the original source
     if centralized_path in CENTRALIZE_MAP:
