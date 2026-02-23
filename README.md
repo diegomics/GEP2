@@ -179,3 +179,32 @@ GEP2_results/
             └── ...png
 ```
 
+### Main tools:
+
+| tool | doi |
+| :--- | :--- |
+|[blobtools](https://github.com/genomehubs/blobtoolkit) | - |
+|[chromap](https://github.com/haowenz/chromap) | 10.1038/s41467-021-26865-w |
+|[cooler](https://github.com/open2c/cooler) | 10.1093/bioinformatics/btz540 |
+|[compleasm](https://github.com/huangnengCSU/compleasm) | 10.1093/bioinformatics/btad595 |
+|[diamond](https://github.com/bbuchfink/diamond) | 10.1038/s41592-021-01101-x |
+|[enabrowsertools](https://github.com/enasequence/enaBrowserTools) | - |
+|[fastp](https://github.com/OpenGene/fastp) | 10.1093/bioinformatics/bty560 |
+|[fastqc](https://github.com/s-andrews/FastQC) | - |
+|[fcs-gx](https://github.com/ncbi/fcs-gx) | 10.1186/s13059-024-03198-7 |
+|[genomescope2](https://github.com/tbenavi1/genomescope2.0) | 10.1038/s41467-020-14998-3 |
+|[gfastats](https://github.com/vgl-hub/gfastats) | 10.1093/bioinformatics/btac460 |
+|[hifiadapterfilt](https://github.com/sheinasim-USDA/HiFiAdapterFilt) | 10.1186/s12864-022-08375-1 |
+|[inspector](https://github.com/Maggi-Chen/Inspector) | 10.1186/s13059-021-02527-4 |
+|[longdust](https://github.com/lh3/longdust) | - |
+|[merqury](https://github.com/marbl/merqury) | 10.1186/s13059-020-02134-9 |
+|[minimap](https://github.com/lh3/minimap2) | 10.1093/bioinformatics/bty191 |
+|[multiqc](https://github.com/MultiQC/MultiQC) | 10.1093/bioinformatics/btw354 |
+|[nanoplot](https://github.com/wdecoster/NanoPlot) | 10.1093/bioinformatics/btad311 |
+|[pairtools](https://github.com/open2c/pairtools) | 10.1101/2023.02.13.528389 |
+|[pretextmap](https://github.com/sanger-tol/PretextMap) | - |
+|[sambamba](https://github.com/biod/sambamba) | 10.1093/bioinformatics/btv098 |
+|[samtools](https://github.com/samtools/samtools) | 10.1093/gigascience/giab008 |
+|[sdust](https://github.com/lh3/sdust) | - |
+|[tidk](https://github.com/tolkit/telomeric-identifier) | 10.1093/bioinformatics/btaf049 |
+
