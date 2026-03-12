@@ -92,7 +92,7 @@ sys.exit(0)
 ")
         
         if [ -z "$MANIFEST_INFO" ]; then
-            echo "[GEP2] ❌ Error: No manifest entry found for {output.asm}"
+            echo "[GEP2] Error: No manifest entry found for {output.asm}"
             exit 1
         fi
         
@@ -102,19 +102,19 @@ sys.exit(0)
         mkdir -p $(dirname {output.asm})
         
         if [ "$METHOD" = "curl" ]; then
-            echo "[GEP2] ⬇️  Downloading assembly from URL: $SOURCE"
+            echo "[GEP2] Downloading assembly from URL: $SOURCE"
             curl -L -C - --retry 3 --retry-delay 5 -o {output.asm}.tmp "$SOURCE"
             
             # Validate download
             if [ ! -s {output.asm}.tmp ]; then
-                echo "[GEP2] ❌ Error: Downloaded file is empty"
+                echo "[GEP2] Error: Downloaded file is empty"
                 exit 1
             fi
             
             # Check minimum file size (10KB for assemblies)
             FILE_SIZE=$(stat -c%s "{output.asm}.tmp" 2>/dev/null || echo "0")
             if [ "$FILE_SIZE" -lt 10240 ]; then
-                echo "[GEP2] ❌ Error: Downloaded file is suspiciously small ($FILE_SIZE bytes)"
+                echo "[GEP2] Error: Downloaded file is suspiciously small ($FILE_SIZE bytes)"
                 rm -f {output.asm}.tmp
                 exit 1
             fi
@@ -123,17 +123,17 @@ sys.exit(0)
             if [[ "{output.asm}" == *.gz ]]; then
                 echo "[GEP2] Validating gzip integrity..."
                 if ! gzip -t {output.asm}.tmp 2>/dev/null; then
-                    echo "[GEP2] ❌ Error: Downloaded file failed gzip integrity check"
+                    echo "[GEP2] Error: Downloaded file failed gzip integrity check"
                     rm -f {output.asm}.tmp
                     exit 1
                 fi
             fi
             
             mv {output.asm}.tmp {output.asm}
-            echo "[GEP2] ✅ Downloaded: {output.asm}"
+            echo "[GEP2] Downloaded: {output.asm}"
             
         elif [ "$METHOD" = "ncbi_assembly" ]; then
-            echo "[GEP2] 🔍 Downloading NCBI assembly: $SOURCE"
+            echo "[GEP2] Downloading NCBI assembly: $SOURCE"
             
             # Parse accession using bash regex (e.g., GCA_963854735.1)
             if [[ $SOURCE =~ ^(GC[AF])_([0-9]{{3}})([0-9]{{3}})([0-9]{{3}})\\.([0-9]+)$ ]]; then
@@ -143,7 +143,7 @@ sys.exit(0)
                 P3=${{BASH_REMATCH[4]}}
                 VERSION=${{BASH_REMATCH[5]}}
             else
-                echo "[GEP2] ❌ Error: Invalid NCBI accession format: $SOURCE"
+                echo "[GEP2] Error: Invalid NCBI accession format: $SOURCE"
                 exit 1
             fi
             
@@ -155,26 +155,26 @@ sys.exit(0)
             ASM_DIR=$(curl -sL "$BASE_URL/" | grep -oP "href=\\"${{SOURCE}}_[^/\\"]+" | head -1 | sed 's/href="//')
             
             if [ -z "$ASM_DIR" ]; then
-                echo "[GEP2] ❌ Error: Could not find assembly directory for $SOURCE"
+                echo "[GEP2] Error: Could not find assembly directory for $SOURCE"
                 exit 1
             fi
             
             # Construct full URL to genomic.fna.gz
             FULL_URL="${{BASE_URL}}/${{ASM_DIR}}/${{ASM_DIR}}_genomic.fna.gz"
-            echo "[GEP2] ⬇️  Downloading from: $FULL_URL"
+            echo "[GEP2] Downloading from: $FULL_URL"
             
             curl -L -C - --retry 5 --retry-delay 10 -o {output.asm}.tmp "$FULL_URL"
             
             # Validate download
             if [ ! -s {output.asm}.tmp ]; then
-                echo "[GEP2] ❌ Error: Downloaded file is empty"
+                echo "[GEP2] Error: Downloaded file is empty"
                 exit 1
             fi
             
             # Check minimum file size
             FILE_SIZE=$(stat -c%s "{output.asm}.tmp" 2>/dev/null || echo "0")
             if [ "$FILE_SIZE" -lt 10240 ]; then
-                echo "[GEP2] ❌ Error: Downloaded file is suspiciously small ($FILE_SIZE bytes)"
+                echo "[GEP2] Error: Downloaded file is suspiciously small ($FILE_SIZE bytes)"
                 rm -f {output.asm}.tmp
                 exit 1
             fi
@@ -182,15 +182,15 @@ sys.exit(0)
             # Validate gzip file
             echo "[GEP2] Validating gzip integrity..."
             if ! gzip -t {output.asm}.tmp 2>/dev/null; then
-                echo "[GEP2] ❌ Error: Downloaded file is not a valid gzip file"
+                echo "[GEP2] Error: Downloaded file is not a valid gzip file"
                 rm -f {output.asm}.tmp
                 exit 1
             fi
             
             mv {output.asm}.tmp {output.asm}
-            echo "[GEP2] ✅ Downloaded NCBI assembly: {output.asm}"
+            echo "[GEP2] Downloaded NCBI assembly: {output.asm}"
         else
-            echo "[GEP2] ❌ Error: Unknown download method: $METHOD"
+            echo "[GEP2] Error: Unknown download method: $METHOD"
             exit 1
         fi
         """
@@ -226,7 +226,7 @@ for item in manifest:
             found = True
             break
 if not found:
-    print('[GEP2] ❌ Error: Accession {wildcards.acc} not found in manifest as single-end reads')
+    print('[GEP2] Error: Accession {wildcards.acc} not found in manifest as single-end reads')
     sys.exit(1)
 "
         
@@ -250,13 +250,13 @@ if not found:
                     LAST_SIZE=$CURRENT_SIZE
                 else
                     STALL_TIME=$((STALL_TIME + CHECK_INTERVAL))
-                    echo "[GEP2] ⏳ Watchdog: No progress for $((STALL_TIME/60)) min (current size: $CURRENT_SIZE bytes)"
+                    echo "[GEP2] Watchdog: No progress for $((STALL_TIME/60)) min (current size: $CURRENT_SIZE bytes)"
                 fi
                 
                 if [ $STALL_TIME -ge $TIMEOUT_SEC ]; then
                     echo ""
                     echo "[GEP2] ------------------------------------------------------------"
-                    echo "[GEP2] 💀 WATCHDOG: Download stalled for $((TIMEOUT_SEC/60)) minutes"
+                    echo "[GEP2] WATCHDOG: Download stalled for $((TIMEOUT_SEC/60)) minutes"
                     echo "[GEP2] ------------------------------------------------------------"
                     echo "[GEP2] Last detected size: $LAST_SIZE bytes"
                     echo "[GEP2] Killing process (PID: $PID)..."
@@ -298,7 +298,7 @@ if not found:
         
         # MAIN DOWNLOAD LOGIC
         # -------------------------------------------------------------------
-        echo "[GEP2] ⬇️  Downloading single-end/long reads: {wildcards.acc}"
+        echo "[GEP2] Downloading single-end/long reads: {wildcards.acc}"
         
         mkdir -p {params.outdir}
         cd {params.outdir}
@@ -319,7 +319,7 @@ if not found:
             # TRY ASPERA FIRST (if not already known to fail)
             # -----------------------------------------------------------------
             if [ "$USE_ASPERA" = "true" ]; then
-                echo "[GEP2] 🚀 Trying Aspera (fast) download..."
+                echo "[GEP2] Trying Aspera (fast) download..."
                 
                 enaDataGet.py -a -f fastq -d . {wildcards.acc} &
                 DOWNLOAD_PID=$!
@@ -336,10 +336,10 @@ if not found:
                 
                 # Check if Aspera actually produced files (not just exit code!)
                 if check_single_files {wildcards.acc}; then
-                    echo "[GEP2] ✅ Aspera download produced files"
+                    echo "[GEP2] Aspera download produced files"
                 else
-                    echo "[GEP2] ⚠️  Aspera failed or produced no files (exit code: $ASPERA_EXIT)"
-                    echo "[GEP2] 🔄 Falling back to HTTP..."
+                    echo "[GEP2] Aspera failed or produced no files (exit code: $ASPERA_EXIT)"
+                    echo "[GEP2] Falling back to HTTP..."
                     USE_ASPERA=false
                     
                     # Clean up any partial Aspera artifacts
@@ -350,7 +350,7 @@ if not found:
             # TRY HTTP (if Aspera failed or was skipped)
             # -----------------------------------------------------------------
             if [ "$USE_ASPERA" = "false" ]; then
-                echo "[GEP2] 🌐 Using HTTP download..."
+                echo "[GEP2] Using HTTP download..."
                 
                 enaDataGet.py -f fastq -d . {wildcards.acc} &
                 DOWNLOAD_PID=$!
@@ -406,17 +406,17 @@ if not found:
                 echo "[GEP2] File size: $FILE_SIZE bytes"
                 
                 if [ "$FILE_SIZE" -lt 1024 ]; then
-                    echo "[GEP2] ⚠️  Downloaded file is suspiciously small"
+                    echo "[GEP2] Downloaded file is suspiciously small"
                 else
                     if gzip -t "{output.reads}" 2>/dev/null; then
-                        echo "[GEP2] ✅ Downloaded and validated: {wildcards.acc}"
+                        echo "[GEP2] Downloaded and validated: {wildcards.acc}"
                         exit 0
                     else
-                        echo "[GEP2] ⚠️  Downloaded file failed gzip integrity check"
+                        echo "[GEP2] Downloaded file failed gzip integrity check"
                     fi
                 fi
             else
-                echo "[GEP2] ⚠️  Expected file not found after download"
+                echo "[GEP2] Expected file not found after download"
                 echo "[GEP2] Looking for: {output.reads}"
                 echo "[GEP2] Directory contents:"
                 ls -la {params.outdir}/ 2>/dev/null || echo "(empty)"
@@ -426,7 +426,7 @@ if not found:
             # -----------------------------------------------------------------
             if [ $ATTEMPT -lt $MAX_RETRIES ]; then
                 echo ""
-                echo "[GEP2] ⚠️  Download attempt $ATTEMPT failed"
+                echo "[GEP2] Download attempt $ATTEMPT failed"
                 echo "[GEP2] Retrying in $RETRY_DELAY seconds..."
                 sleep $RETRY_DELAY
                 rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
@@ -436,7 +436,7 @@ if not found:
         # All retries exhausted
         echo ""
         echo "[GEP2] ------------------------------------------------------------"
-        echo "[GEP2] ❌ ENA DOWNLOAD FAILED AFTER $MAX_RETRIES ATTEMPTS"
+        echo "[GEP2] ENA DOWNLOAD FAILED AFTER $MAX_RETRIES ATTEMPTS"
         echo "[GEP2] ------------------------------------------------------------"
         echo "[GEP2]"
         echo "[GEP2] This could be due to:"
@@ -485,7 +485,7 @@ for item in manifest:
         found = True
         break
 if not found:
-    print('[GEP2] ❌ Error: Accession {wildcards.acc} not found in manifest as paired-end reads')
+    print('[GEP2] Error: Accession {wildcards.acc} not found in manifest as paired-end reads')
     sys.exit(1)
 "
         
@@ -509,13 +509,13 @@ if not found:
                     LAST_SIZE=$CURRENT_SIZE
                 else
                     STALL_TIME=$((STALL_TIME + CHECK_INTERVAL))
-                    echo "[GEP2] ⏳ Watchdog: No progress for $((STALL_TIME/60)) min (current size: $CURRENT_SIZE bytes)"
+                    echo "[GEP2] Watchdog: No progress for $((STALL_TIME/60)) min (current size: $CURRENT_SIZE bytes)"
                 fi
                 
                 if [ $STALL_TIME -ge $TIMEOUT_SEC ]; then
                     echo ""
                     echo "[GEP2] ------------------------------------------------------------"
-                    echo "[GEP2] 💀 WATCHDOG: Download stalled for $((TIMEOUT_SEC/60)) minutes"
+                    echo "[GEP2] WATCHDOG: Download stalled for $((TIMEOUT_SEC/60)) minutes"
                     echo "[GEP2] ------------------------------------------------------------"
                     echo "[GEP2] Last detected size: $LAST_SIZE bytes"
                     echo "[GEP2] Killing process (PID: $PID)..."
@@ -556,7 +556,7 @@ if not found:
         
         # MAIN DOWNLOAD LOGIC
         # -------------------------------------------------------------------
-        echo "[GEP2] ⬇️  Downloading paired-end reads: {wildcards.acc}"
+        echo "[GEP2] Downloading paired-end reads: {wildcards.acc}"
         
         mkdir -p {params.outdir}
         cd {params.outdir}
@@ -577,7 +577,7 @@ if not found:
             # TRY ASPERA FIRST (if not already known to fail)
             # -----------------------------------------------------------------
             if [ "$USE_ASPERA" = "true" ]; then
-                echo "[GEP2] 🚀 Trying Aspera (fast) download..."
+                echo "[GEP2] Trying Aspera (fast) download..."
                 
                 enaDataGet.py -a -f fastq -d . {wildcards.acc} &
                 DOWNLOAD_PID=$!
@@ -594,10 +594,10 @@ if not found:
                 
                 # Check if Aspera actually produced files (not just exit code!)
                 if check_paired_files {wildcards.acc}; then
-                    echo "[GEP2] ✅ Aspera download produced files"
+                    echo "[GEP2] Aspera download produced files"
                 else
-                    echo "[GEP2] ⚠️  Aspera failed or produced no files (exit code: $ASPERA_EXIT)"
-                    echo "[GEP2] 🔄 Falling back to HTTP..."
+                    echo "[GEP2] Aspera failed or produced no files (exit code: $ASPERA_EXIT)"
+                    echo "[GEP2] Falling back to HTTP..."
                     USE_ASPERA=false
                     
                     # Clean up any partial Aspera artifacts
@@ -608,7 +608,7 @@ if not found:
             # TRY HTTP (if Aspera failed or was skipped)
             # -----------------------------------------------------------------
             if [ "$USE_ASPERA" = "false" ]; then
-                echo "[GEP2] 🌐 Using HTTP download..."
+                echo "[GEP2] Using HTTP download..."
                 
                 enaDataGet.py -f fastq -d . {wildcards.acc} &
                 DOWNLOAD_PID=$!
@@ -656,17 +656,17 @@ if not found:
                 echo "[GEP2] File sizes: R1=$R1_SIZE bytes, R2=$R2_SIZE bytes"
                 
                 if [ "$R1_SIZE" -lt 1024 ] || [ "$R2_SIZE" -lt 1024 ]; then
-                    echo "[GEP2] ⚠️  Downloaded files are suspiciously small"
+                    echo "[GEP2] Downloaded files are suspiciously small"
                 else
                     if gzip -t "{output.r1}" 2>/dev/null && gzip -t "{output.r2}" 2>/dev/null; then
-                        echo "[GEP2] ✅ Downloaded and validated paired reads: {wildcards.acc}"
+                        echo "[GEP2] Downloaded and validated paired reads: {wildcards.acc}"
                         exit 0
                     else
-                        echo "[GEP2] ⚠️  Downloaded files failed gzip integrity check"
+                        echo "[GEP2] Downloaded files failed gzip integrity check"
                     fi
                 fi
             else
-                echo "[GEP2] ⚠️  Expected files not found after download"
+                echo "[GEP2] Expected files not found after download"
                 echo "[GEP2] Looking for: {output.r1}"
                 echo "[GEP2]             {output.r2}"
                 echo "[GEP2] Directory contents:"
@@ -677,7 +677,7 @@ if not found:
             # -----------------------------------------------------------------
             if [ $ATTEMPT -lt $MAX_RETRIES ]; then
                 echo ""
-                echo "[GEP2] ⚠️  Download attempt $ATTEMPT failed"
+                echo "[GEP2] Download attempt $ATTEMPT failed"
                 echo "[GEP2] Retrying in $RETRY_DELAY seconds..."
                 sleep $RETRY_DELAY
                 rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
@@ -687,7 +687,7 @@ if not found:
         # All retries exhausted
         echo ""
         echo "[GEP2] ------------------------------------------------------------"
-        echo "[GEP2] ❌ ENA DOWNLOAD FAILED AFTER $MAX_RETRIES ATTEMPTS"
+        echo "[GEP2] ENA DOWNLOAD FAILED AFTER $MAX_RETRIES ATTEMPTS"
         echo "[GEP2] ------------------------------------------------------------"
         echo "[GEP2]"
         echo "[GEP2] This could be due to:"
@@ -731,25 +731,25 @@ sys.exit(0)
 ")
         
         if [ -z "$SOURCE" ]; then
-            echo "[GEP2] ❌ Error: No URL source found in manifest for {output.reads}"
+            echo "[GEP2] Error: No URL source found in manifest for {output.reads}"
             exit 1
         fi
         
         mkdir -p $(dirname {output.reads})
         
-        echo "[GEP2] ⬇️  Downloading reads from URL: $SOURCE"
+        echo "[GEP2] Downloading reads from URL: $SOURCE"
         curl -L -C - --retry 3 --retry-delay 5 -o {output.reads}.tmp "$SOURCE"
         
         # Validate download
         if [ ! -s {output.reads}.tmp ]; then
-            echo "[GEP2] ❌ Error: Downloaded file is empty"
+            echo "[GEP2] Error: Downloaded file is empty"
             exit 1
         fi
         
         # Check minimum file size (1KB)
         FILE_SIZE=$(stat -c%s "{output.reads}.tmp" 2>/dev/null || echo "0")
         if [ "$FILE_SIZE" -lt 1024 ]; then
-            echo "[GEP2] ❌ Error: Downloaded file is suspiciously small ($FILE_SIZE bytes)"
+            echo "[GEP2] Error: Downloaded file is suspiciously small ($FILE_SIZE bytes)"
             rm -f {output.reads}.tmp
             exit 1
         fi
@@ -758,12 +758,12 @@ sys.exit(0)
         if [[ "{output.reads}" == *.gz ]]; then
             echo "[GEP2] Validating gzip integrity..."
             if ! gzip -t {output.reads}.tmp 2>/dev/null; then
-                echo "[GEP2] ❌ Error: Downloaded file failed gzip integrity check"
+                echo "[GEP2] Error: Downloaded file failed gzip integrity check"
                 rm -f {output.reads}.tmp
                 exit 1
             fi
         fi
         
         mv {output.reads}.tmp {output.reads}
-        echo "[GEP2] ✅ Downloaded reads: {output.reads}"
+        echo "[GEP2] Downloaded reads: {output.reads}"
         """

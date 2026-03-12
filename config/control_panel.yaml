@@ -1,9 +1,9 @@
 ###################################################################################################
-# MAIN SETTINGS                                                                                   #
+# GEP2 MAIN SETTINGS                                                                              #
 ###################################################################################################
 
 # Path to the GEP2 data table containing assembly and read paths
-## Table columns: sp_name, asm_id, asm_files, read_type, read_files
+## Table columns: sp_name, asm_id, skip, asm_files, read_type, read_files
 ## Table extension is flexible (xlsx, csv...) and can be online (i.e., google drive)
 ## For google drive and such, set anyone with the link as viewer
 DATA_TABLE: "https://docs.google.com/spreadsheets/d/1xmsstJGBo45SEQgCPncE76u51_VN5IDG9sFFafYkGfI/edit?usp=sharing"
@@ -19,8 +19,8 @@ myRUN: 240     # Maximum time per job in HOURS
 
 # General purpose temp directory for intermediate files
 ## Options: "default" (uses OUT_FOLDER/GEP2_results/tmp), "auto" (will try to get a local SSD
-## from execution/config apptainer-args, falls back to default if <100GB free), or specify a path 
-## "/path/to/dir" to use that particular folder
+## from execution/config apptainer-args, falls back to default if not enough space free), or
+## specify a path "/path/to/dir" to use that particular folder
 TEMP_DIR: "auto"
 
 # Fast temp directory for I/O-intensive operations (e.g., contamination screening)
@@ -28,22 +28,28 @@ TEMP_DIR: "auto"
 ## or specify a fast path like "/dev/shm" or another RAM-mounted filesystem
 FAST_TEMP_DIR: "/dev/shm"
 
+
+# Shared database folder for BUSCO, FCS-GX, etc.
+# Options: "auto" (creates a 'databases' folder inside the GEP2 base folder), or specify a path 
+# "/path/to/dir" to use that particular folder
+## Databases are downloaded once and reused across runs
+DB_FOLDER: "auto"
+
+
 ###################################################################################################
 # OPTIONAL SETTINGS                                                                               #
 ###################################################################################################
 
-# gene completeness evaluation --------------------------------------------------------------------
+# Gene completeness evaluation --------------------------------------------------------------------
 
 # Run gene completeness analysis
 RUN_COMPL: on
 
 # BUSCO lineage to use
-## Options: "auto" (searches for best matching lineage in addition to eukaryota), 
-## or specific lineage name (e.g., eukaryota, primates, insecta, fungi, etc) 
+## Options: "auto" (searches for best matching lineage in addition to eukaryota, but may fail!), 
+## or specific lineage name (e.g., eukaryota, primates, insecta, fungi, etc)
+### get the lineage names here: https://busco-data.ezlab.org/v5/data/lineages/
 LINEAGE: eukaryota
-
-# Use BUSCO instead COMPLEASM 
-PREFER_BUSCO: off # under development
 
 
 # Read processing ---------------------------------------------------------------------------------
@@ -55,9 +61,9 @@ READS_PROC: on
 TRIM_PE: on
 
 # Filter HiFi reads, set to off to skip filtering
-TRIM_HIFI: on
+FILTER_HIFI: on
 
-# Correct ONT reads with Hifiasm (caution, may take several hours)
+# Correct ONT reads with Hifiasm, set to off to skip correction (caution, may take hours)
 CORRECT_ONT: off
 
 
@@ -75,7 +81,7 @@ KMER_LEN: 31
 # If more than one data type per sample, which one to use for k-mer analysis?
 ## Options are given by assigning priority like: hifi>illumina>ont>hic  ...
 ## Also, if a tech is not listed here, will be excluded if MERGE_TECH: on
-DATA_PRIORITY: "illumina>hifi>ont>hic"
+DATA_PRIORITY: "illumina>hifi>ont"
 
 # Merge reads from all technologies for k-mer analysis
 ## Options are off (use only highest priority tech) or on (merge k-mers from all techs)
@@ -85,7 +91,7 @@ MERGE_TECH: off
 PLOIDY: 2
 
 # Use FastK instead of Meryl
-USE_FASTK: off # under development
+#USE_FASTK: off # under development
 
 
 # Long reads-based analysis -----------------------------------------------------------------------
@@ -108,12 +114,17 @@ SKIP_HIC: off
 # Minimum mapping quality for PretextMap
 HIC_MAPQ: 0
 
-# Bin size for cooler (base pairs)
+# Bin size for cooler (base pairs, default is 10000)
 HIC_BINSIZE: 10000
 
 # High resolution mode for PretextMap (larger files but better detail)
 ## If "on" no png snapshot will be created due to a PretextSnapshot issue
 HIC_HIGH_RES: off
+
+# Resolution for the PretextSnapshot PNG
+## Options are HD (default, 720), FHD (1080), 2K (2560), or 4K (3840)
+### Caution: higher resolutions equals to much larger files!
+SNAP_RES: HD
 
 # Pretext tracks (requires RUN_HIC: on)
 ## Gap/N density track (shows assembly gaps)
@@ -127,4 +138,22 @@ REP_TRACK: on
 ### or input the telomere sequence string (e.g. "TTAGGG")
 TELO_TRACK: auto
 
+
 # Contamination analysis --------------------------------------------------------------------------
+
+# Contamination screening with NCBI FCS-GX (requires 512 GB RAM!)
+RUN_FCS: on
+# Skip FCS-GX for assemblies flagged with skip=on in data table
+SKIP_FCS: off
+
+# Contamination screening with BlobTools
+RUN_BLOB: on
+# Skip BlobTools for assemblies flagged with skip=on in data table
+SKIP_BLOB: off
+
+## Options: "quick" (uses SwissProt and fast mode, rough overview), "standard" (uses SwissProt and
+## sensitive mode, good overview), "thorough" (uses Ref Proteomes and fast mode, comprehensive),
+## "full" (uses Ref Proteomes and sensitive mode, most detailed)
+### SwissProt DB is ~1 GB (~2 GB during build), while Ref Proteomes is ~50 GB (~1 TB during build)
+### Caution: "thorough" and "full" options are VERY VERY SERIOUSLY SLOW!!!
+DIAMOND_MODE: quick

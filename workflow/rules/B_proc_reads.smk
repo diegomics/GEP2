@@ -48,11 +48,9 @@ def _get_source_for_centralized_read(wildcards):
 
     # DEBUG
     found = centralized_path in CENTRALIZE_MAP
-    #print(f"[DEBUG-B00] filename={wildcards.filename} | centralized_path={centralized_path} | in_map={found} | map_size={len(CENTRALIZE_MAP)}", flush=True)
     if not found and CENTRALIZE_MAP:
         # Show first key to compare format
         first_key = next(iter(CENTRALIZE_MAP))
-        #print(f"[DEBUG-B00]   example_key={first_key}", flush=True)
     
     # Look up the original source
     if centralized_path in CENTRALIZE_MAP:
@@ -224,12 +222,6 @@ def _get_qc_reports_for_multiqc(w):
     species = w.species
     read_type = w.read_type
     read_type_lower = read_type.lower()
-   
-    ## DEBUG
-    #print(f"[DEBUG] _get_qc_reports_for_multiqc called: {species}/{read_type}")
-    #for grp in _enumerate_centralized_groups(species, read_type):
-    #    print(f"[DEBUG]   Group: {grp}")
-    ## END DEBUG
  
     reports = []
     report_dir = os.path.join(
@@ -250,7 +242,7 @@ def _get_qc_reports_for_multiqc(w):
                     os.path.join(report_dir, f"{rt_lower}_Path{idx}_{base}_fastqc.zip")
                 ])
                 
-                if config.get("TRIM_HIFI", True):
+                if config.get("FILTER_HIFI", True):
                     reports.extend([
                         os.path.join(report_dir, f"{rt_lower}_Path{idx}_{base}_haf_mqc.yaml"),
                         os.path.join(report_dir, f"{rt_lower}_Path{idx}_{base}_filtered_nanoplot")

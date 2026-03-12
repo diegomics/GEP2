@@ -3,13 +3,6 @@ channels:
  - conda-forge
  - bioconda
 dependencies:
- - python=3.12.11
- - snakemake=9.8.0
- - snakemake-executor-plugin-slurm=2.0.3
- - pandas=2.3.3
- - numpy=2.3.5
- - openpyxl=3.1.5
- - pyyaml=6.0.3
- - odfpy=1.4.1
- - xlrd=2.0.2
- - numbers-parser=4.16.2
+ - snakemake=9.16.3
+ - snakemake-executor-plugin-slurm=2.5.3
+ - nomnom=0.1.0

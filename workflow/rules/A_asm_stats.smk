@@ -3,7 +3,7 @@
 # -------------------------------------------------------------------------------
 
 # Note: The following are defined in the main Snakefile:
-#   - BUSCO_DB_DIR: Path to shared BUSCO lineages
+#   - BUSCO_DB_DIR: Path to shared BUSCO lineages (derived from DB_FOLDER)
 #   - get_assembly_input(): Helper to get assembly file path
 #   - get_assembly_files(): Helper to get all assembly files for species/assembly
 #   - get_assembly_basename(): Extract basename from filepath
@@ -14,7 +14,7 @@
 # -------------------------------------------------------------------------------
 
 rule A00_download_compleasm_db:
-    """Download compleasm/BUSCO database (runs only once, stored in pipeline folder)"""
+    """Download compleasm/BUSCO database (runs only once, stored in DB_FOLDER)"""
     output:
         flag = os.path.join(BUSCO_DB_DIR, "eukaryota_odb12.done"),
         placement_flag = os.path.join(BUSCO_DB_DIR, "placement_files.done")
@@ -138,6 +138,7 @@ rule A02_compleasm:
             -t {threads} \
             --library_path "$TMPDB" \
             {params.lineage_arg} \
+            --odb odb12 \
             --retrocopy
         
         echo "[GEP2] Packaging outputs"
@@ -169,5 +170,5 @@ rule A02_compleasm:
         cp summary.txt "{output.summary}"
         cp results.tar.gz "{output.archive}"
         
-        echo "[GEP2] ✅ compleasm completed successfully"
+        echo "[GEP2] compleasm completed successfully"
         """

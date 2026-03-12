@@ -1,5 +1,5 @@
 # GEP2 - Genome Evaluation Pipeline 2
-GEP2_VER = "0.2.0-beta"
+GEP2_VER = "0.3.0"
 
 # Debug verbosity (set to True for detailed DAG building messages)
 VERBOSE = False
@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 # -------------------------------------------------------------------------------
-# CONSTANTS & PATHS
+# CONSTANTS & MAIN PATHS
 # -------------------------------------------------------------------------------
 
 BASEDIR = Path(workflow.basedir)
@@ -34,11 +34,45 @@ SCRIPTS_DIR = BASEDIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-# Path to shared BUSCO lineages (reusable across runs)
-BUSCO_DB_DIR = os.path.join(ROOT, "busco_lineages")
+# Load main control_panel yaml file
+CONFIG_PATH = ROOT / "config" / "control_panel.yaml"
+if not CONFIG_PATH.exists():
+    raise FileNotFoundError(f"Config file not found: {CONFIG_PATH}")
+configfile: str(CONFIG_PATH)
+
+# Path to shared databases (BUSCO, FCS-GX, etc)
+_db_folder_raw = str(config.get("DB_FOLDER", "auto")).strip()
+if _db_folder_raw.lower() == "auto":
+    DB_FOLDER = os.path.join(ROOT, "databases")
+else:
+    DB_FOLDER = _db_folder_raw
+
+BUSCO_DB_DIR = os.path.join(DB_FOLDER, "busco_lineages")
+FCS_GX_DIR = os.path.join(DB_FOLDER, "fcs_gx")
+TAXDUMP_DIR = os.path.join(DB_FOLDER, "taxdump")
+UNIPROT_DIR     = os.path.join(DB_FOLDER, "uniprot")
+
+# Folders for diamond depending on the mode
+DIAMOND_MODE = config.get("DIAMOND_MODE", "standard")
+assert DIAMOND_MODE in ("quick", "standard", "thorough", "full"), \
+    f"Invalid DIAMOND_MODE '{DIAMOND_MODE}'. Must be: quick, standard, thorough, full"
+
+_DIAMOND_MODES = {
+    "quick":    {"db_type": "swissprot",            "sensitivity": "--fast"},
+    "standard": {"db_type": "swissprot",            "sensitivity": "--sensitive"},
+    "thorough": {"db_type": "reference_proteomes",  "sensitivity": "--fast"},
+    "full":     {"db_type": "reference_proteomes",  "sensitivity": "--sensitive"},
+}
+DIAMOND_DB_TYPE    = _DIAMOND_MODES[DIAMOND_MODE]["db_type"]
+DIAMOND_SENSITIVITY = _DIAMOND_MODES[DIAMOND_MODE]["sensitivity"]
+
+DIAMOND_DB_DIR  = os.path.join(UNIPROT_DIR, DIAMOND_DB_TYPE)
+DIAMOND_DB_PATH = os.path.join(DIAMOND_DB_DIR, DIAMOND_DB_TYPE + ".dmnd")
+
+os.makedirs(DB_FOLDER, exist_ok=True)
 
 # Placeholder for missing input files (used by processing rules)
-_MISSING_IN = None  # Will be set after out_folder is defined
+_MISSING_IN = None  # Will be set after out_folder is defined #CLEAN?
 
 
 # -------------------------------------------------------------------------------
@@ -185,8 +219,8 @@ def _should_skip_analysis(species, asm_id, analysis_type):
     """Check if analysis should be skipped for this assembly.
     
     Logic:
-        - If assembly has skip=on in table AND config has SKIP_{analysis}=on → skip
-        - Otherwise → run
+        - If assembly has skip=on in table AND config has SKIP_{analysis}=on -> skip
+        - Otherwise -> run
     
     Args:
         species: Species name
@@ -267,18 +301,8 @@ def get_reads_only_species():
 
 IS_MAIN = is_main_process()
 
-# # DEBUG — remove after diagnosis
-# import sys as _sys
-# print(f"[GEP2-DEBUG] IS_MAIN={IS_MAIN} | argv={_sys.argv}", flush=True)
-
 # Import resource calculator
-from misc.resource_calc import ResourceCalculator, create_resource_functions
-
-# Load main control_panel yaml file
-CONFIG_PATH = ROOT / "config" / "control_panel.yaml"
-if not CONFIG_PATH.exists():
-    raise FileNotFoundError(f"Config file not found: {CONFIG_PATH}")
-configfile: str(CONFIG_PATH)
+from resource_calc import ResourceCalculator, create_resource_functions
 
 # Validate required config keys
 required_keys = ["DATA_TABLE", "OUT_FOLDER"]
@@ -321,17 +345,27 @@ if os.path.exists(manifest_path):
                 DOWNLOAD_MANIFEST_DICT[entry["destination"]] = entry
 
 
+if IS_MAIN:
+    print(f"[GEP2] DB_FOLDER: {DB_FOLDER}")
+    print(f"[GEP2] BUSCO_DB_DIR: {BUSCO_DB_DIR}")
+    print(f"[GEP2] FCS_GX_DIR: {FCS_GX_DIR}")
+    print(f"[GEP2] TAXDUMP_DIR: {TAXDUMP_DIR}")
+    print(f"[GEP2] DIAMOND_MODE: {DIAMOND_MODE}")
+    print(f"[GEP2] DIAMOND_DB_TYPE: {DIAMOND_DB_TYPE}")
+    print(f"[GEP2] DIAMOND_DB_DIR: {DIAMOND_DB_DIR}")
+    print(f"[GEP2] DIAMOND_DB_PATH: {DIAMOND_DB_PATH}")
+
 # -------------------------------------------------------------------------------
 # TEMP DIRECTORY LOGIC
 # -------------------------------------------------------------------------------
 # TEMP_DIR options:
-#   "default" or "" → OUT_FOLDER/GEP2_results/tmp
-#   "auto" → detect from profile's apptainer-args, check space at runtime, fall back
-#   "{path}" → use that path
+#   "default" or "" -> OUT_FOLDER/GEP2_results/tmp
+#   "auto" -> detect from profile's apptainer-args, check space at runtime, fall back
+#   "{path}" -> use that path
 #
 # FAST_TEMP_DIR options:
-#   "default" or "" → same as TEMP_DIR (shows hints for faster options)
-#   "{path}" → use that path
+#   "default" or "" -> same as TEMP_DIR (shows hints for faster options)
+#   "{path}" -> use that path
 
 def _detect_ramfs_mounts():
     """Detect RAM-mounted filesystems"""
@@ -424,19 +458,19 @@ _temp_dir_raw = str(config.get("TEMP_DIR", "")).strip().lower()
 if _temp_dir_raw in ("", "default"):
     TEMP_DIR = FALLBACK_TMP
     TEMP_DIR_CANDIDATES = [FALLBACK_TMP]
-    print(f"[GEP2] TEMP_DIR → {TEMP_DIR}")
+    print(f"[GEP2] TEMP_DIR -> {TEMP_DIR}")
 elif _temp_dir_raw == "auto":
     # Try to detect from profile's apptainer-args
     detected_paths = _parse_fast_paths_from_profiles()
     if detected_paths:
         TEMP_DIR = detected_paths[0]  # Primary choice
         TEMP_DIR_CANDIDATES = detected_paths + [FALLBACK_TMP]  # All options including fallback
-        print(f"[GEP2] TEMP_DIR → {TEMP_DIR} (auto, with {len(detected_paths)} fast option(s))")
-        print(f"[GEP2] Fallback chain: {' → '.join(TEMP_DIR_CANDIDATES)}")
+        print(f"[GEP2] TEMP_DIR -> {TEMP_DIR} (auto, with {len(detected_paths)} fast option(s))")
+        print(f"[GEP2] Fallback chain: {' -> '.join(TEMP_DIR_CANDIDATES)}")
     else:
         TEMP_DIR = FALLBACK_TMP
         TEMP_DIR_CANDIDATES = [FALLBACK_TMP]
-        print(f"[GEP2] TEMP_DIR → {TEMP_DIR} (auto, no fast path detected in profiles)")
+        print(f"[GEP2] TEMP_DIR -> {TEMP_DIR} (auto, no fast path detected in profiles)")
 else:
     # User-specified path - also add /tmp subdirectory
     user_path = str(config.get("TEMP_DIR", "")).strip()
@@ -445,7 +479,7 @@ else:
     else:
         TEMP_DIR = user_path
     TEMP_DIR_CANDIDATES = [TEMP_DIR, FALLBACK_TMP]
-    print(f"[GEP2] TEMP_DIR → {TEMP_DIR}")
+    print(f"[GEP2] TEMP_DIR -> {TEMP_DIR}")
 
 # --- Parse FAST_TEMP_DIR config ---
 _fast_temp_raw = str(config.get("FAST_TEMP_DIR", "")).strip().lower()
@@ -455,7 +489,7 @@ if _fast_temp_raw in ("", "default"):
     # Show hints about better options
     ram_options = _detect_ramfs_mounts()
     if ram_options:
-        print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR}")
+        print(f"[GEP2] FAST_TEMP_DIR -> {FAST_TEMP_DIR}")
         print(f"[GEP2] ⚡ RAM-mounted filesystems detected - consider setting FAST_TEMP_DIR for faster I/O:")
         for mnt, typ, free_gb in ram_options:
             if free_gb is not None:
@@ -463,7 +497,7 @@ if _fast_temp_raw in ("", "default"):
             else:
                 print(f"       - {mnt} [{typ}]")
     else:
-        print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR}")
+        print(f"[GEP2] FAST_TEMP_DIR -> {FAST_TEMP_DIR}")
 else:
     # User-specified path - also add /tmp subdirectory
     user_fast_path = str(config.get("FAST_TEMP_DIR", "")).strip()
@@ -471,7 +505,7 @@ else:
         FAST_TEMP_DIR = os.path.join(user_fast_path, "tmp")
     else:
         FAST_TEMP_DIR = user_fast_path
-    print(f"[GEP2] FAST_TEMP_DIR → {FAST_TEMP_DIR}")
+    print(f"[GEP2] FAST_TEMP_DIR -> {FAST_TEMP_DIR}")
 
 
 # Build the candidates list as a colon-separated string for shell
@@ -504,7 +538,7 @@ gep2_get_workdir() {{
         
         # Check if directory exists or can be created
         if ! mkdir -p "$CANDIDATE" 2>/dev/null; then
-            echo "[GEP2]     ⚠️  Cannot create/access directory" >&2
+            echo "[GEP2]   Cannot create/access directory" >&2
             continue
         fi
         
@@ -530,19 +564,19 @@ gep2_get_workdir() {{
         
         # Check if adjusted space is sufficient
         if [ "${{ADJUSTED_GB:-0}}" -ge "$REQUIRED_GB" ] 2>/dev/null; then
-            echo "[GEP2] ✅ Using: $CANDIDATE (${{ADJUSTED_GB}} GB effective, ${{AVAIL_GB}} GB raw)" >&2
+            echo "[GEP2] Using: $CANDIDATE (${{ADJUSTED_GB}} GB effective, ${{AVAIL_GB}} GB raw)" >&2
             echo "$CANDIDATE"
             return 0
         fi
         
-        echo "[GEP2]     ❌ Insufficient space (${{ADJUSTED_GB}} GB < ${{REQUIRED_GB}} GB required)" >&2
+        echo "[GEP2]   Insufficient space (${{ADJUSTED_GB}} GB < ${{REQUIRED_GB}} GB required)" >&2
     done
     
     # All candidates exhausted, use fallback anyway with warning
     mkdir -p "$FALLBACK" 2>/dev/null || true
     FALLBACK_KB=$(df -k "$FALLBACK" 2>/dev/null | awk 'NR==2 {{print $4}}' || echo "0")
     FALLBACK_GB=$((FALLBACK_KB / 1024 / 1024))
-    echo "[GEP2] ⚠️  All fast options exhausted, using fallback: $FALLBACK (${{FALLBACK_GB}} GB free)" >&2
+    echo "[GEP2] All fast options exhausted, using fallback: $FALLBACK (${{FALLBACK_GB}} GB free)" >&2
     echo "$FALLBACK"
 }}
 """
@@ -584,9 +618,9 @@ def download_data_table(url: str, output_dir: Path) -> Path:
     print(f"[GEP2] Downloading data table...")
     try:
         urllib.request.urlretrieve(url, output_path)
-        print(f"[GEP2] ✅ Data table downloaded to: {output_path}")
+        print(f"[GEP2] Data table downloaded to: {output_path}")
     except (URLError, HTTPError) as e:
-        raise ValueError(f"❌ Failed to download data table from {url}: {e}")
+        raise ValueError(f"Failed to download data table from {url}: {e}")
     
     return output_path
 
@@ -905,7 +939,7 @@ def centralize_reads(yaml_data: dict, out_folder: Path) -> dict:
     """
     updated_yaml = copy.deepcopy(yaml_data)
 
-    # Mapping: centralized_path → original_path
+    # Mapping: centralized_path -> original_path
     centralize_map = {}
 
     # Load existing map to handle re-runs (where YAML already has centralized paths)
@@ -1008,9 +1042,6 @@ def centralize_reads(yaml_data: dict, out_folder: Path) -> dict:
             
             centralized_paths = []
             path_idx = 1  # Path index for this read set
-
-            # # DEBUG
-            # print(f"[DEBUG-CENTRALIZE] {read_type_normalized}: original_paths={original_paths}", flush=True)
 
             if is_paired:
                 # Process paired reads: iterate in pairs, use shared base name
@@ -1176,8 +1207,7 @@ def load_samples_config():
     if need_full_processing or config_data is None:
         print("(U ᵔﻌᵔ)っ  NomNom is handling the data table...")
         result = subprocess.run(
-            ["python", 
-             str(SCRIPTS_DIR / "NomNom" / "NomNom.py"),
+            ["nomnom", 
              "-a", 
              str(SCRIPTS_DIR / "GEP2_table.attributes"),
              "-o", 
@@ -1225,13 +1255,6 @@ def load_samples_config():
     with yaml_output.open('w') as f:
         yaml.dump(updated_yaml, f, default_flow_style=False, sort_keys=False)
     print(f"[GEP2] YAML updated with centralized paths")
-   
-    # # DEBUG
-    # if download_manifest:
-    #     for item in download_manifest:
-    #         print(f"[GEP2-DEBUG] manifest item: {item}", flush=True)
-    # else:
-    #     print("[GEP2-DEBUG] download_manifest is EMPTY", flush=True)
  
     return updated_yaml
 
@@ -1272,10 +1295,10 @@ if IS_MAIN:
     try:
         calculator = ResourceCalculator("config/resources.yaml", config)
         cpu_func, mem_func, time_func = create_resource_functions(calculator)
-        print("✅ Resource calculator initialized successfully")
+        print("Resource calculator initialized successfully")
         print(f"   Max CPU: {calculator.user_cpu}, Max RAM: {calculator.user_ram}GB, Max Time: {calculator.user_runtime}h")
     except Exception as e:
-        print(f"❌ Error initializing resource calculator: {e}")
+        print(f"Error initializing resource calculator: {e}")
         exit(1)
 else:
     try:
@@ -1515,7 +1538,7 @@ def get_original_read_path(species, read_type, filename):
         sp_data = samples_config["sp_name"][species]
 
         for asm_id, asm_data in sp_data["asm_id"].items():
-            
+
             read_type_dict = asm_data.get("read_type", {})
             
             for rt_key, rt_data in read_type_dict.items():
@@ -2100,6 +2123,97 @@ def get_hic_analysis_results():
     return results
 
 
+# COLLECTORS - Contamination Analysis (FCS-GX)
+# -------------------------------------------------------------------------------
+
+def get_contamination_analysis_results():
+    """Collect all FCS-GX contamination screening outputs if enabled."""
+    results = []
+
+    # Check global toggle
+    if not _as_bool(config.get("RUN_FCS", False)):
+        return results
+
+    # Resource gate: FCS-GX requires 512 GB RAM
+    user_ram = int(config.get("myRAM", 0))
+    if user_ram > 0 and user_ram < 512:
+        if IS_MAIN:
+            print(f"[GEP2] RUN_FCS is on but myRAM ({user_ram} GB) < 512 GB required for FCS-GX. Skipping.")
+        return results
+
+    for species, sp_data in samples_config.get("sp_name", {}).items():
+        for asm_id, asm_data in sp_data.get("asm_id", {}).items():
+            # Check per-assembly skip
+            if _should_skip_analysis(species, asm_id, "fcs"):
+                continue
+
+            # Skip reads-only entries (no assembly)
+            if _is_reads_only_entry(species, asm_id):
+                continue
+
+            # Check that at least one assembly file exists
+            asm_files = get_assembly_files(species, asm_id)
+            if not asm_files:
+                continue
+
+            # Request the .done flag (actual reports are created inside the rule)
+            results.append(os.path.join(
+                config["OUT_FOLDER"], "GEP2_results", species, asm_id,
+                "decontamination", "fcs-gx", "fcs_gx.done"
+            ))
+
+    return results
+
+
+# COLLECTORS - BlobToolKit (blob/snail/cumulative plots)
+# -------------------------------------------------------------------------------
+
+def get_blobtools_results():
+    """Collect all blobtools plot outputs if enabled."""
+    results = []
+
+    if not _as_bool(config.get("RUN_BLOB", False)):
+        return results
+
+    for species, sp_data in samples_config.get("sp_name", {}).items():
+        for asm_id, asm_data in sp_data.get("asm_id", {}).items():
+            if _should_skip_analysis(species, asm_id, "blob"):
+                continue
+
+            if _is_reads_only_entry(species, asm_id):
+                continue
+
+            # Check that reads are available (blobtools needs coverage)
+            has_reads = False
+            read_type_dict = asm_data.get("read_type", {})
+            for rt_key, rt_data in read_type_dict.items():
+                if not rt_key or rt_key == "None" or not rt_data:
+                    continue
+                read_files = rt_data.get("read_files", {})
+                if any(v and v != "None" for v in read_files.values()):
+                    has_reads = True
+                    break
+
+            if not has_reads:
+                if IS_MAIN:
+                    print(f"[GEP2] Skipping blobtools for {species}/{asm_id}: no reads available")
+                continue
+
+            asm_files = get_assembly_files(species, asm_id)
+            for asm_key, asm_path in asm_files.items():
+                if not asm_path or asm_path == "None":
+                    continue
+
+                asm_basename = get_assembly_basename(asm_path)
+                results.append(os.path.join(
+                    config["OUT_FOLDER"], "GEP2_results", species, asm_id,
+                    "decontamination", "blobtools", asm_basename,
+                    "blobplots.done"
+                ))
+
+    return results
+
+
 # COLLECTORS - Reports
 # -------------------------------------------------------------------------------
 
@@ -2129,10 +2243,10 @@ def get_report_results():
                 config["OUT_FOLDER"], "GEP2_results", species, asm_id,
                 f"{asm_id}_report.md"
             ))
-            expected_files.append(os.path.join(
-                config["OUT_FOLDER"], "GEP2_results", species, asm_id,
-                f"{asm_id}_report.pdf"
-            ))
+            # expected_files.append(os.path.join(
+            #     config["OUT_FOLDER"], "GEP2_results", species, asm_id,
+            #     f"{asm_id}_report.pdf"
+            # ))
     
     return expected_files
 
@@ -2185,6 +2299,22 @@ def get_all_expected_outputs():
         if IS_MAIN:
             print("[GEP2] RUN_HIC is off - skipping Hi-C analysis")
     
+    # Contamination analysis - FCS-GX (if enabled and sufficient RAM)
+    run_fcs = _as_bool(config.get("RUN_FCS", False))
+    if run_fcs:
+        expected_files.extend(get_contamination_analysis_results())
+    else:
+        if IS_MAIN:
+            print("[GEP2] RUN_FCS is off - skipping FCS-GX contamination screening")
+
+    # BlobToolKit plots (if enabled and reads available)
+    run_blob = _as_bool(config.get("RUN_BLOB", False))
+    if run_blob:
+        expected_files.extend(get_blobtools_results())
+    else:
+        if IS_MAIN:
+            print("[GEP2] RUN_BLOB is off - skipping BlobToolKit analysis")
+
     # Final reports (always runs, adapts to what's available)
     expected_files.extend(get_report_results())
     
@@ -2201,6 +2331,7 @@ include: "rules/B_proc_reads.smk"
 include: "rules/C_kmer_analysis.smk"
 include: "rules/D_longread_analysis.smk"
 include: "rules/E_hic_analysis.smk"
+include: "rules/F_cont_analysis.smk"
 include: "rules/Z_reporting.smk"
 
 

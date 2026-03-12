@@ -9,6 +9,9 @@
 # - compleasm (gene completeness)
 # - Merqury (k-mer QV and completeness)
 # - GenomeScope2 (genome profiling)
+# - Inspector (structural errors)
+# - Blobtools (contamination screening)
+# - FCS-GX (contamination screening)
 
 import argparse
 import re
@@ -21,14 +24,16 @@ import requests
 from urllib.parse import quote
 from pathlib import Path
 
+__version__ = '0.1.5'
 
+# This is crap isn't working yet, will work on it soon...
 def convert_md_to_pdf(md_file, pdf_file=None):
     """
     Convert markdown file to PDF using pandoc with weasyprint.
     
     Requirements:
-        pip install weasyprint --break-system-packages
-        apt install pandoc (or conda install pandoc)
+        weasyprint --break-system-packages
+        pandoc
     """
     if pdf_file is None:
         pdf_file = os.path.splitext(md_file)[0] + '.pdf'
@@ -232,6 +237,88 @@ def parse_compleasm(filepath):
     return metrics
 
 
+def parse_compleasm_full(filepath):
+    """
+    Parse compleasm full_table.tsv file and extract completeness metrics + frameshift rate.
+    Lineage is derived from the parent directory name (e.g., rosales_odb12/).
+    Only one lineage per file.
+    """
+    metrics = {
+        'eukaryota_single': None,
+        'eukaryota_dupl': None,
+        'other_lineage': None,
+        'other_single': None,
+        'other_dupl': None,
+        'frameshift_rate': None,
+        'frameshift_is_eukaryota': None
+    }
+    
+    # Get lineage from directory name (e.g., rosales_odb12)
+    lineage = os.path.basename(os.path.dirname(os.path.abspath(filepath)))
+    
+    seen = {}
+    counts = {'Single': 0, 'Duplicated': 0, 'Retrocopy': 0,
+              'Fragmented': 0, 'Interspersed': 0, 'Missing': 0}
+    total_complete_copies = 0  # All Single/Duplicated rows (all physical copies)
+    frameshifted_copies = 0    # Single/Duplicated rows with column 11 > 0
+    
+    with open(filepath, 'r') as f:
+        for line in f:
+            if line.startswith('#'):
+                continue
+            parts = line.strip().split('\t')
+            if len(parts) < 2:
+                continue
+            
+            gene_id = parts[0]
+            status = parts[1]
+            
+            # Count unique genes per category (for S/D percentages)
+            if gene_id not in seen:
+                seen[gene_id] = True
+                if status in counts:
+                    counts[status] += 1
+            
+            # Count all physical copies for frameshift rate
+            if status in ('Single', 'Duplicated'):
+                total_complete_copies += 1
+                if len(parts) >= 11:
+                    try:
+                        if int(parts[10]) > 0:
+                            frameshifted_copies += 1
+                    except (ValueError, IndexError):
+                        pass
+    
+    total = sum(counts.values())
+    if total == 0:
+        return metrics
+    
+    s_percent = (counts['Single'] / total) * 100
+    d_percent = (counts['Duplicated'] / total) * 100
+    
+    # Frameshift rate
+    if total_complete_copies > 0:
+        frameshift_rate = (frameshifted_copies / total_complete_copies) * 100
+    else:
+        frameshift_rate = 0.0
+    
+    is_eukaryota = 'eukaryota' in lineage.lower()
+    
+    if is_eukaryota:
+        metrics['eukaryota_single'] = s_percent
+        metrics['eukaryota_dupl'] = d_percent
+    else:
+        lineage_name = lineage.replace('_odb', ' (odb') + ')'
+        metrics['other_lineage'] = lineage_name
+        metrics['other_single'] = s_percent
+        metrics['other_dupl'] = d_percent
+    
+    metrics['frameshift_rate'] = frameshift_rate
+    metrics['frameshift_is_eukaryota'] = is_eukaryota
+    
+    return metrics
+
+
 def parse_merqury_qv(filepath, num_assemblies):
     """
     Parse Merqury QV file.
@@ -321,7 +408,7 @@ def find_merqury_plots(merqury_dir, asm_id):
     for cn_file in cn_files:
         basename = os.path.basename(cn_file)
         
-        # FIX: Use Regex instead of dot counting.
+        # Use Regex instead of dot counting.
         # This correctly handles prefixes with dots (e.g., gfArmOsto1.1)
         # It looks for .asmX. or .hapX. or _asmX_ tags.
         if re.search(r'[\._](asm|hap)\d+[\._]', basename):
@@ -433,6 +520,16 @@ def get_rating(value, metric_type, haploid_number=None):
         else:
             return '*---'
     
+    elif metric_type == 'compl_frameshift':
+        if value < 2:
+            return '****'
+        elif value < 5:
+            return '***-'
+        elif value < 15:
+            return '**--'
+        else:
+            return '*---'
+    
     return '····'
 
 
@@ -452,10 +549,45 @@ def format_number(value):
     return str(value)
 
 
+def parse_fcs_gx(filepath):
+    """
+    Parse FCS-GX report file and count flagged sequences.
+    Skips the first 2 header lines and counts the remaining lines.
+    Originally was "awk 'NR > 2' report.txt | wc -l", but let's python
+    """
+    try:
+        with open(filepath, 'r') as f:
+            lines = f.readlines()
+        return max(0, len(lines) - 2)
+    except Exception as e:
+        print(f"Warning: Could not parse FCS-GX file {filepath}: {e}")
+        return None
+
+
+def parse_inspector(filepath):
+    """
+    Parse Inspector summary_statistics file and extract the structural error count.
+    Looks for a line like: Structural error\t0
+    """
+    try:
+        with open(filepath, 'r') as f:
+            for line in f:
+                if line.startswith("Structural error"):
+                    parts = line.strip().split('\t')
+                    if len(parts) >= 2:
+                        return int(parts[-1])
+        print(f"Warning: 'Structural error' line not found in {filepath}")
+        return None
+    except Exception as e:
+        print(f"Warning: Could not parse Inspector file {filepath}: {e}")
+        return None
+
+
 def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, 
                    merqury_qv_values, merqury_completeness_values,
                    haploid_number, haploid_source, genomescope_plot, 
-                   merqury_plots, hic_files, output_file):
+                   merqury_plots, hic_plots, blob_plots, fcs_gx_files,
+                   inspector_values, output_file):
     """Generate the markdown report supporting 1 or 2 assemblies."""
     
     num_assemblies = len(gfastats_list)
@@ -567,6 +699,16 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list,
             ratings = [get_rating(v, 'compl_dupl') for v in values]
             formatted_values = [f"{v:.2f}%" if v is not None else "N/A" for v in values]
             add_metric("COMPL Dupl.  (x)", formatted_values, ratings)
+        
+        # COMPL Frame. - frameshift rate (only from full_table.tsv)
+        values = [c.get('frameshift_rate') for c in compleasm_list]
+        if any(v is not None for v in values):
+            # Determine label based on lineage
+            is_euk = any(c.get('frameshift_is_eukaryota') for c in compleasm_list)
+            frame_label = "COMPL Frame. (e)" if is_euk else "COMPL Frame. (x)"
+            ratings = [get_rating(v, 'compl_frameshift') for v in values]
+            formatted_values = [f"{v:.2f}%" if v is not None else "N/A" for v in values]
+            add_metric(frame_label, formatted_values, ratings)
     
     # ---- Merqury metrics ----
     
@@ -577,6 +719,12 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list,
     if merqury_completeness_values and any(v is not None for v in merqury_completeness_values):
         ratings = [get_rating(v, 'merqury_completeness') for v in merqury_completeness_values]
         add_metric("MERQ Compl.", merqury_completeness_values, ratings)
+    
+    # ---- Inspector metrics ----
+    
+    if inspector_values and any(v is not None for v in inspector_values):
+        ratings = ['····'] * num_assemblies
+        add_metric("INSP Str. Error", inspector_values, ratings)
     
     # ---- Build table ----
     
@@ -712,11 +860,11 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list,
                 ])
     
     # Add Hi-C Contact Maps section
-    if hic_files:
+    if hic_plots:
         # Filter to ensure files actually exist
-        valid_hic_files = [f for f in hic_files if os.path.exists(f)]
+        valid_hic_plots = [f for f in hic_plots if os.path.exists(f)]
         
-        if valid_hic_files:
+        if valid_hic_plots:
             report_dir = os.path.dirname(os.path.abspath(output_file))
             
             report_lines.extend([
@@ -725,11 +873,11 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list,
                 "### Hi-C Contact Maps",
             ])
             
-            for i, hic_plot in enumerate(valid_hic_files):
+            for i, hic_plot in enumerate(valid_hic_plots):
                 rel_path = os.path.relpath(hic_plot, report_dir)
                 
                 # Determine label: use "asmX" if multiple files, otherwise generic "Assembly"
-                if len(valid_hic_files) > 1:
+                if len(valid_hic_plots) > 1:
                     label = f"asm{i+1}"
                 else:
                     label = "Assembly"
@@ -740,6 +888,50 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list,
                     f"![Hi-C Map - {label}]({rel_path})",
                 ])
 
+    # Add Blob Plots and FCS-GX section
+    valid_blob_plots = [f for f in blob_plots if os.path.exists(f)] if blob_plots else []
+    valid_fcs_gx = [f for f in fcs_gx_files if os.path.exists(f)] if fcs_gx_files else []
+
+    if valid_blob_plots or valid_fcs_gx:
+        report_dir = os.path.dirname(os.path.abspath(output_file))
+        
+        report_lines.extend([
+            "",
+            "---",
+            "### Contamination Screening",
+        ])
+        
+        # Blob plots
+        if valid_blob_plots:
+            for i, blob_plot in enumerate(valid_blob_plots):
+                rel_path = os.path.relpath(blob_plot, report_dir)
+                
+                # Determine label: use "asmX" if multiple files, otherwise generic "Assembly"
+                if len(valid_blob_plots) > 1:
+                    label = f"asm{i+1}"
+                else:
+                    label = "Assembly"
+                
+                report_lines.extend([
+                    "",
+                    f"#### {label}",
+                    f"![Blob Plot - {label}]({rel_path})",
+                ])
+        
+        # FCS-GX flagged sequences
+        if valid_fcs_gx:
+            report_lines.append("")
+            for i, fcs_file in enumerate(valid_fcs_gx):
+                if len(valid_fcs_gx) > 1:
+                    label = f"asm{i+1}"
+                else:
+                    label = "Assembly"
+                
+                count = parse_fcs_gx(fcs_file)
+                if count is not None:
+                    report_lines.append(f"FCS-GX flagged sequences {label}: {count}<br>")
+                else:
+                    report_lines.append(f"FCS-GX flagged sequences {label}: N/A<br>")
 
 
     # Footer
@@ -778,14 +970,18 @@ Examples:
         """
     )
     
+    parser.add_argument('-v', '--version', action='version',
+                       version=f'%(prog)s {__version__}')
     parser.add_argument('-s', '--species', required=True, 
                        help='Species name (with underscore, e.g., Homo_sapiens)')
     parser.add_argument('-a', '--assembly', required=True, 
                        help='Assembly ID')
     parser.add_argument('-g', '--gfastats', required=True, nargs='+',
                        help='gfastats output file(s) - one per assembly')
-    parser.add_argument('-c', '--compleasm', required=False, nargs='+', default=[],
-                       help='compleasm output file(s) - one per assembly')
+    parser.add_argument('-c', '--compleasm-summary', required=False, nargs='+', default=[],
+                       help='compleasm summary.txt file(s) - one per assembly')
+    parser.add_argument('--compleasm-full', required=False, nargs='+', default=[],
+                       help='compleasm {lineage}_odb{version}/full_table.tsv file(s) - one per assembly')
     parser.add_argument('-q', '--merqury-qv', required=False,
                        help='Merqury QV file (*.qv)')
     parser.add_argument('-m', '--merqury-completeness', required=False,
@@ -796,6 +992,12 @@ Examples:
                        help='GenomeScope2 linear plot PNG')
     parser.add_argument('--hic', required=False, nargs='+', default=[],
                        help='Hi-C contact-map png file(s) - one per assembly')
+    parser.add_argument('--blob', required=False, nargs='+', default=[],
+                       help='Blob Plot png file(s) - one per assembly')
+    parser.add_argument('--fcs-gx', required=False, nargs='+', default=[],
+                       help='FCS-GX report.txt file(s) - one per assembly')
+    parser.add_argument('--Inspector', required=False, nargs='+', default=[],
+                       help='Inspector summary_statistics file(s) - one per assembly')
     parser.add_argument('--also-pdf', action='store_true',
                        help='Also generate PDF (requires pandoc and weasyprint)')
     parser.add_argument('-o', '--output', required=True, 
@@ -811,10 +1013,21 @@ Examples:
             sys.exit(1)
         
         # Validate compleasm count matches gfastats count (if provided)
-        if args.compleasm and len(args.compleasm) != num_assemblies:
-            print(f"Error: Number of compleasm files ({len(args.compleasm)}) must match "
-                  f"number of gfastats files ({num_assemblies})", file=sys.stderr)
-            sys.exit(1)
+        compleasm_source = None
+        if args.compleasm_full:
+            compleasm_source = 'full'
+            if len(args.compleasm_full) != num_assemblies:
+                print(f"Error: Number of compleasm-full files ({len(args.compleasm_full)}) must match "
+                      f"number of gfastats files ({num_assemblies})", file=sys.stderr)
+                sys.exit(1)
+            if args.compleasm_summary:
+                print("Note: --compleasm-full provided, ignoring --compleasm-summary")
+        elif args.compleasm_summary:
+            compleasm_source = 'summary'
+            if len(args.compleasm_summary) != num_assemblies:
+                print(f"Error: Number of compleasm-summary files ({len(args.compleasm_summary)}) must match "
+                      f"number of gfastats files ({num_assemblies})", file=sys.stderr)
+                sys.exit(1)
         
         # Clean species name
         species_clean = args.species.replace('_', ' ')
@@ -837,11 +1050,14 @@ Examples:
         for gf_file in args.gfastats:
             gfastats_list.append(parse_gfastats(gf_file))
         
-        # Parse compleasm files (if provided)
+        # Parse compleasm files (if provided) - full takes priority over summary
         print("Parsing compleasm output(s)...")
         compleasm_list = []
-        if args.compleasm:
-            for comp_file in args.compleasm:
+        if compleasm_source == 'full':
+            for comp_file in args.compleasm_full:
+                compleasm_list.append(parse_compleasm_full(comp_file))
+        elif compleasm_source == 'summary':
+            for comp_file in args.compleasm_summary:
                 compleasm_list.append(parse_compleasm(comp_file))
         else:
             # Empty compleasm results
@@ -865,6 +1081,13 @@ Examples:
         # Find Merqury plots
         merqury_plots = find_merqury_plots(args.merqury_dir, args.assembly)
         
+        # Parse Inspector files (if provided)
+        inspector_values = [None] * num_assemblies
+        if args.Inspector:
+            print("Parsing Inspector output(s)...")
+            for i, insp_file in enumerate(args.Inspector[:num_assemblies]):
+                inspector_values[i] = parse_inspector(insp_file)
+        
         # Create output directory if needed
         os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
         
@@ -882,6 +1105,9 @@ Examples:
             args.genomescope_plot,
             merqury_plots,
             args.hic,
+            args.blob,
+            args.fcs_gx,
+            inspector_values,
             args.output
         )
         

@@ -101,7 +101,7 @@ def _get_long_reads_for_inspector(species, asm_id, read_type):
                     )
                     
                     if read_type == "hifi":
-                        if config.get("TRIM_HIFI", True):
+                        if config.get("FILTER_HIFI", True):
                             read_path = os.path.join(
                                 base_dir, "processed", 
                                 f"hifi_Path{idx}_{base}_filtered.fq.gz"
@@ -303,5 +303,5 @@ rule D01_run_inspector:
         mkdir -p {params.outdir}
         cp -r "$TEMP_DIR/output/"* {params.outdir}/
         
-        echo "[GEP2] ✅ Inspector completed successfully"
+        echo "[GEP2] Inspector completed successfully"
         """

@@ -3,14 +3,14 @@
 # -------------------------------------------------------------------------------
 #
 # Workflow:
-#   1. chromap index      → index assembly
-#   2. chromap map        → .pairs file
-#   3. pairtools stats    → stats from .pairs
-#   4. genome file        → scaffold sizes for cooler
-#   5. cooler cload pairs → .cool file
-#   6. cooler zoomify     → .mcool file
-#   7. pairtools split    → .bam from .pairs
-#   8. PretextMap         → .pretext from .bam
+#   1. chromap index      -> index assembly
+#   2. chromap map        -> .pairs file
+#   3. pairtools stats    -> stats from .pairs
+#   4. genome file        -> scaffold sizes for cooler
+#   5. cooler cload pairs -> .cool file
+#   6. cooler zoomify     -> .mcool file
+#   7. pairtools split    -> .bam from .pairs
+#   8. PretextMap         -> .pretext from .bam
 #
 # Note: The following are defined in the main Snakefile:
 #   - samples_config: Parsed sample configuration
@@ -278,7 +278,7 @@ def _get_long_reads_for_coverage(wildcards):
                 
                 # Determine if we should use processed or raw reads
                 if rt_normalized == "hifi":
-                    use_processed = reads_proc_enabled and _as_bool(config.get("TRIM_HIFI", False))
+                    use_processed = reads_proc_enabled and _as_bool(config.get("FILTER_HIFI", False))
                     proc_suffix = "_filtered.fq.gz"
                 elif rt_normalized == "ont":
                     use_processed = reads_proc_enabled and _as_bool(config.get("CORRECT_ONT", False))
@@ -364,6 +364,15 @@ def _get_long_read_type_for_coverage(wildcards):
         return "hifi"
 
 
+SNAP_RES_MAP = {"HD": 720, "FHD": 1080, "2K": 2560, "4K": 3840}
+
+def _get_snap_res(config):
+    key = str(config.get("SNAP_RES", "HD")).upper()
+    if key not in SNAP_RES_MAP:
+        raise ValueError(f"Invalid SNAP_RES '{key}'. Choose from: {', '.join(SNAP_RES_MAP)}")
+    return SNAP_RES_MAP[key]
+
+
 # -------------------------------------------------------------------------------
 # RULES
 # -------------------------------------------------------------------------------
@@ -409,7 +418,7 @@ rule E00_chromap_index:
         
         chromap -i -r {input.asm} -o {output.index}
         
-        echo "[GEP2] ✅ Chromap index created successfully"
+        echo "[GEP2] Chromap index created successfully"
         """
 
 
@@ -483,7 +492,7 @@ rule E01_chromap_map:
         echo "[GEP2] Compressing pairs file..."
         bgzip -@ {threads} -c "$TEMP_DIR/{wildcards.asm_basename}.pairs" > {output.pairs}
         
-        echo "[GEP2] ✅ Chromap mapping completed successfully"
+        echo "[GEP2] Chromap mapping completed successfully"
         """
 
 
@@ -518,7 +527,7 @@ rule E02_pairtools_stats:
         
         pairtools stats {input.pairs} -o {output.stats}
         
-        echo "[GEP2] ✅ Pairtools stats completed"
+        echo "[GEP2] Pairtools stats completed"
         """
 
 
@@ -531,10 +540,10 @@ rule E03_create_genome_file:
             config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
             "hic", "{asm_basename}", "{asm_basename}.genome"
         )
-    threads: cpu_func("light_task")
+    threads: cpu_func("genomescope")
     resources:
-        mem_mb = mem_func("light_task"),
-        runtime = time_func("light_task")
+        mem_mb = mem_func("genomescope"),
+        runtime = time_func("genomescope")
     container: CONTAINERS["hic_analysis"]
     log:
         os.path.join(
@@ -555,7 +564,7 @@ rule E03_create_genome_file:
         seqkit fx2tab -l {input.asm} | \
             awk 'BEGIN{{OFS="\\t"}} {{print $1, $NF}}' > {output.genome}
         
-        echo "[GEP2] ✅ Genome file created"
+        echo "[GEP2] Genome file created"
         echo ""
         echo "=== Scaffold sizes (first 20) ==="
         head -20 {output.genome}
@@ -563,7 +572,7 @@ rule E03_create_genome_file:
         # Sanity check - verify no zero-length scaffolds
         ZEROS=$(awk '$2 == 0' {output.genome} | wc -l)
         if [ "$ZEROS" -gt 0 ]; then
-            echo "[GEP2] ⚠️  WARNING: Found $ZEROS scaffolds with zero length!"
+            echo "[GEP2] WARNING: Found $ZEROS scaffolds with zero length!"
         fi
         """
 
@@ -610,7 +619,7 @@ rule E04_cooler_cload:
             {input.pairs} \
             {output.cool}
         
-        echo "[GEP2] ✅ Cool file created"
+        echo "[GEP2] Cool file created"
         """
 
 
@@ -648,7 +657,7 @@ rule E05_cooler_zoomify:
             {input.cool} \
             -o {output.mcool}
         
-        echo "[GEP2] ✅ Mcool file created"
+        echo "[GEP2] Mcool file created"
         """
 
 rule E06_pretext_map:
@@ -666,6 +675,7 @@ rule E06_pretext_map:
     params:
         highres_flag = "--highRes" if _as_bool(config.get("HIC_HIGH_RES", False)) else "",
         run_snapshot = not _as_bool(config.get("HIC_HIGH_RES", False)),
+        snap_res = _get_snap_res(config),
         outdir = lambda w: os.path.join(
             config["OUT_FOLDER"], "GEP2_results", w.species, w.asm_id,
             "hic", w.asm_basename
@@ -699,7 +709,7 @@ rule E06_pretext_map:
             {params.highres_flag} \
             -o {output.pretext}
         
-        echo "[GEP2] ✅ PretextMap created successfully"
+        echo "[GEP2] PretextMap created successfully"
         ls -lh {output.pretext}
         
         # Create snapshot (only if not in high-res mode)
@@ -708,15 +718,15 @@ rule E06_pretext_map:
             echo "[GEP2] Creating PretextSnapshot..."
             cd {params.outdir}
             
-            if PretextSnapshot -m {output.pretext} -r 3840 --sequences "=full" 2>&1; then
-                echo "[GEP2] ✅ PretextSnapshot created"
+            if PretextSnapshot -m {output.pretext} -r {params.snap_res} --sequences "=full" 2>&1; then
+                echo "[GEP2] PretextSnapshot created"
                 ls -la {wildcards.asm_basename}_snapshots/ 2>/dev/null || true
             else
-                echo "[GEP2] ⚠️  PretextSnapshot failed (non-fatal)"
+                echo "[GEP2] PretextSnapshot failed (non-fatal)"
             fi
         else
             echo ""
-            echo "[GEP2] ⚠️  Skipping PretextSnapshot (not compatible with high-res mode)"
+            echo "[GEP2] Skipping PretextSnapshot (not compatible with high-res mode)"
         fi
         """
 
@@ -755,7 +765,7 @@ rule E07_windows_bed:
         # Create windows using pre-generated genome file
         bedtools makewindows -g {input.genome} -w 1000 > {output.windows}
         
-        echo "[GEP2] ✅ Windows BED created"
+        echo "[GEP2] Windows BED created"
         wc -l {output.windows}
         """
 
@@ -803,7 +813,7 @@ rule E08_gap_track:
                  printf "%s\\t%d\\t%d\\t%d\\n", a[1], b[1]-1, b[2], n_count
              }}' > {output.bedgraph}
         
-        echo "[GEP2] ✅ Gap density track created"
+        echo "[GEP2] Gap density track created"
         head -5 {output.bedgraph}
         """
 
@@ -844,7 +854,7 @@ rule E09_sdust_track:
         awk 'BEGIN{{OFS="\\t"}} 
              {{print $1, $2, $3, $5}}' > {output.bedgraph}
         
-        echo "[GEP2] ✅ Sdust track created"
+        echo "[GEP2] Sdust track created"
         head -5 {output.bedgraph}
         """
 
@@ -891,7 +901,7 @@ rule E10_ldust_track:
         awk 'BEGIN{{OFS="\\t"}} 
              {{print $1, $2, $3, $5}}' > {output.bedgraph}
         
-        echo "[GEP2] ✅ Longdust track created"
+        echo "[GEP2] Longdust track created"
         head -5 {output.bedgraph}
         """
 
@@ -947,7 +957,7 @@ rule E11_coverage_track:
         awk 'BEGIN{{OFS="\\t"}}
             !/^#/ && NR>1 {{printf "%s\\t%s\\t%s\\t%d\\n", $1, $2, $3, $5}}' > {output.bedgraph}
         
-        echo "[GEP2] ✅ Coverage track created"
+        echo "[GEP2] Coverage track created"
         head -5 {output.bedgraph}
         """
 
@@ -1038,7 +1048,7 @@ rule E12_telo_track:
                          printf "%s\\t%d\\t%d\\t%d\\n", chrom, start, end, total
                      }}' "$RAW_TSV" > {output.bedgraph}
                 TRACK_CREATED=true
-                echo "[GEP2] ✅ Telomere track created with custom motif $CUSTOM_MOTIF"
+                echo "[GEP2] Telomere track created with custom motif $CUSTOM_MOTIF"
             fi
         else
             # Auto mode: try GoaT first, then tidk explore
@@ -1113,12 +1123,12 @@ PYEOF
                          !/^#/ && NF>=4 {{printf "%s\\t%s\\t%s\\t%d\\n", $1, $2, $3, int($4)}}' \
                          "$RAW_BG" > {output.bedgraph}
                     TRACK_CREATED=true
-                    echo "[GEP2] ✅ Telomere track created with clade $CLADE"
+                    echo "[GEP2] Telomere track created with clade $CLADE"
                 else
-                    echo "[GEP2] ⚠️  No bedgraph file found after tidk find"
+                    echo "[GEP2] No bedgraph file found after tidk find"
                 fi
             else
-                echo "[GEP2] ⚠️  No matching TIDK clade found in lineage"
+                echo "[GEP2] No matching TIDK clade found in lineage"
             fi
             
             # Fallback: use tidk explore if no clade match or tidk find failed
@@ -1164,19 +1174,19 @@ PYEOF
                                  printf "%s\\t%d\\t%d\\t%d\\n", chrom, start, end, total
                              }}' "$RAW_TSV" > {output.bedgraph}
                         TRACK_CREATED=true
-                        echo "[GEP2] ✅ Telomere track created with motif $TOP_MOTIF"
+                        echo "[GEP2] Telomere track created with motif $TOP_MOTIF"
                     else
-                        echo "[GEP2] ⚠️  No TSV file found after tidk search"
+                        echo "[GEP2] No TSV file found after tidk search"
                     fi
                 else
-                    echo "[GEP2] ⚠️  Could not extract telomere motif from explore output"
+                    echo "[GEP2] Could not extract telomere motif from explore output"
                 fi
             fi
         fi
         
         # If still no track, create empty file
         if [ "$TRACK_CREATED" = "false" ]; then
-            echo "[GEP2] ⚠️  Could not generate telomere track, creating empty file"
+            echo "[GEP2] Could not generate telomere track, creating empty file"
             touch {output.bedgraph}
         fi
         
@@ -1244,7 +1254,7 @@ rule E13_add_pretext_tracks:
         
         for TRACK_FILE in "${{TRACKS[@]}}"; do
             if [ ! -f "$TRACK_FILE" ]; then
-                echo "[GEP2] ⚠️  Track file not found: $TRACK_FILE"
+                echo "[GEP2] Track file not found: $TRACK_FILE"
                 continue
             fi
             
@@ -1256,7 +1266,7 @@ rule E13_add_pretext_tracks:
             DATA_LINES=$(grep -v '^#' "$TRACK_FILE" | wc -l)
             
             if [ "$DATA_LINES" -eq 0 ]; then
-                echo "[GEP2] ⚠️  Track $TRACK_NAME has no data, skipping"
+                echo "[GEP2] Track $TRACK_NAME has no data, skipping"
                 continue
             fi
             
@@ -1276,10 +1286,10 @@ rule E13_add_pretext_tracks:
             # Replace output with updated version
             mv "$TEMP_PRETEXT" {output.pretext}
             
-            echo "[GEP2] ✅ Added $TRACK_NAME"
+            echo "[GEP2] Added $TRACK_NAME"
         done
         
         echo ""
-        echo "[GEP2] ✅ All tracks added to pretext"
+        echo "[GEP2] All tracks added to pretext"
         ls -lh {output.pretext}
         """

@@ -20,7 +20,7 @@ def _get_processed_read_path(species, read_type, idx, base):
         else:
             return os.path.join(base_dir, f"{read_type_lower}_Path{idx}_{base}_1.fq.gz")
     elif read_type_lower == "hifi":
-        if config.get("TRIM_HIFI", True):
+        if config.get("FILTER_HIFI", True):
             return os.path.join(base_dir, "processed", f"hifi_Path{idx}_{base}_filtered.fq.gz")
         else:
             return os.path.join(base_dir, f"hifi_Path{idx}_{base}.fq.gz")
@@ -53,7 +53,7 @@ def get_per_read_kmer_input(wildcards):
     
     # Try to find any matching file
     if read_type == "hifi":
-        if config.get("TRIM_HIFI", True):
+        if config.get("FILTER_HIFI", True):
             # Look for filtered files with any Path index
             import glob
             pattern = os.path.join(base_dir, "processed", f"hifi_Path*_{base}_filtered.fq.gz")
@@ -270,7 +270,7 @@ rule C00_merge_assembly_kmer_db:
         cp -r merged.meryl {output.meryl_db}
         cp merged.hist {output.hist}
         
-        echo "[GEP2] ✅ Assembly k-mer database complete"
+        echo "[GEP2] Assembly k-mer database complete"
         """
 
 
@@ -334,7 +334,7 @@ rule C01_run_genomescope2:
                      -p {params.ploidy} \\
                      -n {wildcards.asm_id}
         
-        echo "[GEP2] ✅ GenomeScope2 complete"
+        echo "[GEP2] GenomeScope2 complete"
         """
 
 
@@ -465,7 +465,7 @@ rule C02_run_merqury:
             exit 1
         fi
         
-        echo "[GEP2] ✅ Merqury completed"
+        echo "[GEP2] Merqury completed"
         echo "=== QV Summary ==="
         cat {output.qv}
         echo "=== Completeness Summary ==="
@@ -592,7 +592,7 @@ rule C10_merge_reads_only_kmer_db:
         cp -r merged.meryl {output.meryl_db}
         cp merged.hist {output.hist}
         
-        echo "[GEP2] ✅ Reads-only k-mer database complete"
+        echo "[GEP2] Reads-only k-mer database complete"
         """
 
 
@@ -653,5 +653,5 @@ rule C11_reads_only_genomescope2:
                      -p {params.ploidy} \
                      -n {wildcards.species}
         
-        echo "[GEP2] ✅ GenomeScope2 complete"
+        echo "[GEP2] GenomeScope2 complete"
         """
