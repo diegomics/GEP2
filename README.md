@@ -235,7 +235,7 @@ GEP2_results/
 |[pairtools](https://github.com/open2c/pairtools) | 10.1101/2023.02.13.528389 | 1.1.3 | docker://diegomics/hic_analysis:0.2 |
 |[pretextgraph](https://github.com/sanger-tol/PretextGraph) | - | 0.0.9 | docker://diegomics/hic_analysis:0.2 |
 |[pretextmap](https://github.com/sanger-tol/PretextMap) | - | 0.2.4 | docker://diegomics/hic_analysis:0.2 |
-|[pretextmap](https://github.com/sanger-tol/PretextSnapshot) | - | 0.0.6 | docker://diegomics/hic_analysis:0.2 |
+|[pretextsnapshot](https://github.com/sanger-tol/PretextSnapshot) | - | 0.0.6 | docker://diegomics/hic_analysis:0.2 |
 |[sambamba](https://github.com/biod/sambamba) | 10.1093/bioinformatics/btv098 | 1.0.1 | docker://diegomics/hic_analysis:0.2 |
 |[samtools](https://github.com/samtools/samtools) | 10.1093/gigascience/giab008 | 1.22.1 | docker://diegomics/hic_analysis:0.2 |
 |[sdust](https://github.com/lh3/sdust) | - | 0.1 | docker://diegomics/hic_analysis:0.2 |
