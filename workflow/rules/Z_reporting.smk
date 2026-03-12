@@ -227,7 +227,7 @@ def get_report_hic_snapshots(wildcards):
 
 def get_blobplot_inputs(wildcards):
     """Get all blobplot files for this assembly (if enabled)."""
-    if not _as_bool(config.get("RUN_BLOB", True)):
+    if not _as_bool(config.get("RUN_BLOB", False)):
         return []
     
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
@@ -239,7 +239,7 @@ def get_blobplot_inputs(wildcards):
             blob_files.append(os.path.join(
                 config["OUT_FOLDER"], "GEP2_results", wildcards.species,
                 wildcards.asm_id, "decontamination", "blobtools", asm_basename, 
-                "BlobDir.blob.circle.png"
+                "blobplots.done"
             ))
     
     return blob_files
@@ -249,7 +249,7 @@ def get_report_fcs_inputs(wildcards):
     """Get fcs-gx done flag for this assembly (if enabled).
     The actual report filenames contain an unpredictable taxid,
     so we depend on the sentinel flag and find files at runtime."""
-    if not _as_bool(config.get("RUN_FCS", True)):
+    if not _as_bool(config.get("RUN_FCS", False)):
         return []
     
     return [os.path.join(
@@ -260,7 +260,7 @@ def get_report_fcs_inputs(wildcards):
 
 def get_report_fcs_dirs(wildcards):
     """Get per-assembly fcs-gx directories for runtime file discovery."""
-    if not _as_bool(config.get("RUN_FCS", True)):
+    if not _as_bool(config.get("RUN_FCS", False)):
         return []
     
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
@@ -305,11 +305,11 @@ def get_all_report_inputs(wildcards):
     # because PretextSnapshot can fail. They're passed as params and
     # checked at runtime in the shell command.
     
-    # Blobplots if enabled
+    # Blobplots if enabled (depends on sentinel .done file)
     inputs.extend(get_blobplot_inputs(wildcards))
     
-    # Blobplots and FCS-GX are NOT included here as required inputs
-    # because they may not exist. They're passed as params and
+    # FCS-GX is NOT included here as a required input
+    # because it may not exist. It's passed as params and
     # checked at runtime in the shell command.
     
     return inputs
