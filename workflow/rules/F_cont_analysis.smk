@@ -808,6 +808,7 @@ rule F04_diamond_blastx:
             --evalue 1e-25 \
             --threads {threads} \
             --tmpdir "$TEMP_DIR" \
+            --block-size 2 \
             --out {output.hits}
 
         # Verify output
@@ -906,6 +907,7 @@ rule F05_map_reads_for_blob:
             minimap2 -ax {params.preset} \
                 -t $MAP_THREADS \
                 --secondary=no \
+                -Q \
                 {input.asm} \
                 ${{ALL_READS[@]}} \
             | samtools view -bu -@ $VIEW_THREADS \
@@ -926,6 +928,7 @@ rule F05_map_reads_for_blob:
                 minimap2 -ax {params.preset} \
                     -t $MAP_THREADS \
                     --secondary=no \
+                    -Q \
                     {input.asm} \
                     "${{ALL_READS[0]}}" "${{ALL_READS[1]}}" \
                 | samtools view -bu -@ $VIEW_THREADS \
@@ -949,6 +952,7 @@ rule F05_map_reads_for_blob:
                     minimap2 -ax {params.preset} \
                         -t $MAP_THREADS \
                         --secondary=no \
+                        -Q \
                         {input.asm} \
                         "${{ALL_READS[$i]}}" "${{ALL_READS[$((i+1))]}}" \
                     | samtools view -bu -@ $VIEW_THREADS \

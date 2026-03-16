@@ -29,10 +29,10 @@ TEMP_DIR: "auto"
 FAST_TEMP_DIR: "/dev/shm"
 
 
-# Shared database folder for BUSCO, FCS-GX, etc.
+# Shared database folder for BUSCO, FCS-GX, uniptot, etc.
 # Options: "auto" (creates a 'databases' folder inside the GEP2 base folder), or specify a path 
-# "/path/to/dir" to use that particular folder
-## Databases are downloaded once and reused across runs
+# "/path/to/dir" to use that particular folder to put all the folders
+## Databases are downloaded once and reused across runs (caution: they take disk space!!!)
 DB_FOLDER: "auto"
 
 

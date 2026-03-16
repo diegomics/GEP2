@@ -224,7 +224,7 @@ resources:
 
   diamond_blastx:
     max_cpu: 16
-    mem_gb: 64
+    mem_gb: 96
     runtime_min: 2880                       # 48h
     
   create_blobdir:
