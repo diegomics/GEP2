@@ -808,7 +808,7 @@ rule F04_diamond_blastx:
             --evalue 1e-25 \
             --threads {threads} \
             --tmpdir "$TEMP_DIR" \
-            --block-size 2 \
+            --block-size 4 \
             --out {output.hits}
 
         # Verify output

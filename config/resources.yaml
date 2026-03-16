@@ -224,9 +224,10 @@ resources:
 
   diamond_blastx:
     max_cpu: 16
-    mem_gb: 96
-    runtime_min: 2880                       # 48h
-    
+    base_mem_gb: 20
+    mem_gb_per_uncompressed_gb: 48
+    runtime_min: 1440
+
   create_blobdir:
     max_cpu: 4
     mem_gb: 16
