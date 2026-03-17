@@ -929,9 +929,9 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list,
                 
                 count = parse_fcs_gx(fcs_file)
                 if count is not None:
-                    report_lines.append(f"FCS-GX flagged sequences {label}: {count}<br>")
+                    report_lines.append(f"FCS-GX flagged sequences {label}: {count} <br>")
                 else:
-                    report_lines.append(f"FCS-GX flagged sequences {label}: N/A<br>")
+                    report_lines.append(f"FCS-GX flagged sequences {label}: N/A <br>")
 
 
     # Footer

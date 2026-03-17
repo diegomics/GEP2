@@ -244,6 +244,24 @@ def get_blobplot_inputs(wildcards):
     
     return blob_files
 
+def get_blobplot_dirs(wildcards):
+    """Get blobtools output directories for the reporting script."""
+    if not _as_bool(config.get("RUN_BLOB", False)):
+        return []
+    
+    asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
+    
+    blob_dirs = []
+    for asm_key, asm_path in sorted(asm_files.items()):
+        if asm_path and asm_path != "None":
+            asm_basename = get_assembly_basename(asm_path)
+            blob_dirs.append(os.path.join(
+                config["OUT_FOLDER"], "GEP2_results", wildcards.species,
+                wildcards.asm_id, "decontamination", "blobtools", asm_basename
+            ))
+    
+    return blob_dirs
+
 
 def get_report_fcs_inputs(wildcards):
     """Get fcs-gx done flag for this assembly (if enabled).
@@ -341,7 +359,7 @@ rule Z00_generate_report:
         ),
         inspector = lambda w: get_report_inspector_inputs(w),
         hic_snapshots = lambda w: get_report_hic_snapshots(w),
-        blobplots = lambda w: get_blobplot_inputs(w),
+        blobplots = lambda w: get_blobplot_dirs(w),
         fcs_gx_dirs = lambda w: get_report_fcs_dirs(w),
         script_path = str(SCRIPTS_DIR / "make_gep2_report.py")
     container: CONTAINERS["gep2_base"]
@@ -413,10 +431,24 @@ rule Z00_generate_report:
             cmd="$cmd --hic $HIC_SNAPSHOTS"
         fi
         
-        if [ -n "{params.blobplots}" ]; then
-            cmd="$cmd --blob {params.blobplots}"
+
+        BLOB_PNGS=""
+        for blobdir in {params.blobplots}; do
+            if [ -d "$blobdir" ]; then
+                # Blob plot: BlobDir.blob.circle.png
+                BLOB_PNG=$(find "$blobdir" -maxdepth 1 -name "*.blob.circle.png" -type f | head -1)
+                if [ -n "$BLOB_PNG" ]; then
+                    BLOB_PNGS="$BLOB_PNGS $BLOB_PNG"
+                fi
+                # Could also grab snail/cumulative here if the script supports them
+            fi
+        done
+
+        if [ -n "$BLOB_PNGS" ]; then
+            cmd="$cmd --blob $BLOB_PNGS"
         fi
-        
+
+
         # FCS-GX: find report files at runtime (filenames contain unpredictable taxid)
         FCS_GX_FILES=""
         for fcs_dir in {params.fcs_gx_dirs}; do
