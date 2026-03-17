@@ -54,7 +54,7 @@ The table should contain these columns:
 |---------|--------|------|-----------|-----------|------------|
 |         |        |      |           |           |            |
 
-**Please see the [example table](https://docs.google.com/spreadsheets/d/1xmsstJGBo45SEQgCPncE76u51_VN5IDG9sFFafYkGfI/edit?gid=1029606022#gid=1029606022)**.Please see the example table. **The easiest is to make a copy of that Google table** (`File`->`Make a copy`) and replace the fields with your data. Remember to change permissions (`Share`-> change `General access` to "Anyone with the link" `viewer`)
+**Please see the [example table](https://docs.google.com/spreadsheets/d/1xmsstJGBo45SEQgCPncE76u51_VN5IDG9sFFafYkGfI/edit?gid=1029606022#gid=1029606022)**. **The easiest is to make a copy of that Google table** (`File`->`Make a copy`) and replace the fields with your data. Remember to change permissions (`Share`-> change `General access` to "Anyone with the link" `viewer`)
 
 #### Column Descriptions:
 
