@@ -76,6 +76,7 @@ config/control_panel.yaml
 
 ### 5) Configure Cluster or Computer Parameters
 
+Depending on which mode you will run, configure the respective parameters in the config file. **Important:** Don't forget to bind the folders in the _apptainer-args_ field.
 ```
 GEP2/execution/
 ├── local/
@@ -84,7 +85,7 @@ GEP2/execution/
     └── config.yaml
 ```
 
-**IMPORTANT:** You can tweak per-tool resources boundaries in `GEP2/config/resources.yaml`
+**Note:** You can tweak per-tool resources boundaries in `GEP2/config/resources.yaml`
 
 ### 6) Run!
 
@@ -116,6 +117,13 @@ snakemake --profile execution/slurm --dry-run
 You can also inspect:
 - `GEP2_results/data_config.yaml`
 - `GEP2_results/download_manifest.json`
+
+#### Common Troubleshooting:
+- If your process was killed or stopped abruptly, Snakemake might complain about incomplete files when you try to run it again. We can tell Snakemake to identify and rerun those incomplete parts (and always a good idea to try a dry-run first):
+```bash
+snakemake --profile execution/local --rerun-incomplete —dry-run
+```
+- If Snakemake was suddenly killed, it might leave a hidden lock on your working directory to prevent other processes from overwriting files, and will tell you the directory is locked. You need to unlock it first before proceed with the run command: `snakemake --unlock`
 
 ---
 
