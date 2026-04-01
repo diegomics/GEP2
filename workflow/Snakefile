@@ -1192,7 +1192,21 @@ def load_samples_config():
                     need_full_processing = False
             except:
                 pass
-    
+            
+            if not need_full_processing and config_data:
+                # Verify previously queued downloads actually exist
+                manifest_check = out_folder / "download_manifest.json"
+                if manifest_check.exists():
+                    try:
+                        with manifest_check.open() as f:
+                            prev_manifest = json.load(f)
+                        missing = [e for e in prev_manifest if not Path(e["destination"]).exists()]
+                        if missing:
+                            print(f"[GEP2] {len(missing)} previously queued download(s) not yet on disk, re-processing from table...")
+                            need_full_processing = True
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
     if not IS_MAIN:
         if yaml_output.exists():
             with yaml_output.open() as f:
