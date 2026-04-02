@@ -120,13 +120,13 @@ def _get_best_read_type_for_blob(species, asm_id):
 
 def _get_blob_read_files(species, asm_id, target_read_type):
     """Get centralized read files for the given read type.
-
     Returns a list of file paths. For paired-end types, R1 and R2 files are
     returned as consecutive pairs: [r1_a, r2_a, r1_b, r2_b, ...].
     For single-end types: [reads_a, reads_b, ...].
     """
     files = []
     is_paired = target_read_type in ["illumina", "10x", "hic"]
+    reads_proc = _as_bool(config.get("READS_PROC", True))
 
     try:
         asm_data = samples_config["sp_name"][species]["asm_id"][asm_id]
@@ -146,6 +146,8 @@ def _get_blob_read_files(species, asm_id, target_read_type):
                 if not path_value or path_value == "None":
                     continue
 
+                idx = str(path_key).replace("Path", "") if "Path" in str(path_key) else "1"
+
                 if isinstance(path_value, str) and "," in path_value:
                     paths = [p.strip() for p in path_value.split(",")]
                 elif isinstance(path_value, list):
@@ -153,7 +155,58 @@ def _get_blob_read_files(species, asm_id, target_read_type):
                 else:
                     paths = [str(path_value)]
 
-                files.extend(paths)
+                for p in paths:
+                    basename = os.path.basename(p)
+                    base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', basename, flags=re.IGNORECASE)
+                    for ext in ['.fq.gz', '.fastq.gz']:
+                        if base.endswith(ext):
+                            base = base[:-len(ext)]
+                    # Strip pair suffix and processing suffixes
+                    base = re.sub(r'[_.]?[12]$', '', base)
+                    base = base.replace("_trimmed", "").replace("_filtered", "").replace("_corrected", "")
+
+                    base_dir = os.path.join(
+                        config["OUT_FOLDER"], "GEP2_results", "data", species,
+                        "reads", target_read_type
+                    )
+
+                    if target_read_type in ["illumina", "10x", "hic"]:
+                        use_proc = reads_proc and _as_bool(config.get("TRIM_PE", True))
+                        if use_proc:
+                            read_path_1 = os.path.join(base_dir, "processed", f"{target_read_type}_Path{idx}_{base}_1_trimmed.fq.gz")
+                            read_path_2 = os.path.join(base_dir, "processed", f"{target_read_type}_Path{idx}_{base}_2_trimmed.fq.gz")
+                        else:
+                            read_path_1 = os.path.join(base_dir, f"{target_read_type}_Path{idx}_{base}_1.fq.gz")
+                            read_path_2 = os.path.join(base_dir, f"{target_read_type}_Path{idx}_{base}_2.fq.gz")
+                            
+                        # Only append if we haven't added this pair yet
+                        if read_path_1 not in files:
+                            files.extend([read_path_1, read_path_2])
+                            
+                    elif target_read_type == "hifi":
+                        use_proc = reads_proc and _as_bool(config.get("FILTER_HIFI", True))
+                        if use_proc:
+                            read_path = os.path.join(base_dir, "processed", f"hifi_Path{idx}_{base}_filtered.fq.gz")
+                        else:
+                            read_path = os.path.join(base_dir, f"hifi_Path{idx}_{base}.fq.gz")
+                            
+                        if read_path not in files:
+                            files.append(read_path)
+                            
+                    elif target_read_type == "ont":
+                        use_proc = reads_proc and _as_bool(config.get("CORRECT_ONT", False))
+                        if use_proc:
+                            read_path = os.path.join(base_dir, "processed", f"ont_Path{idx}_{base}_corrected.fq.gz")
+                        else:
+                            read_path = os.path.join(base_dir, f"ont_Path{idx}_{base}.fq.gz")
+                            
+                        if read_path not in files:
+                            files.append(read_path)
+                            
+                    else:
+                        read_path = os.path.join(base_dir, f"{target_read_type}_Path{idx}_{base}.fq.gz")
+                        if read_path not in files:
+                            files.append(read_path)
 
     except (KeyError, TypeError, AttributeError):
         pass

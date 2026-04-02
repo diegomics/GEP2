@@ -14,18 +14,20 @@ def _get_processed_read_path(species, read_type, idx, base):
         "reads", read_type_lower
     )
     
+    reads_proc = _as_bool(config.get("READS_PROC", True))
+    
     if read_type_lower in ["illumina", "10x"]:
-        if config.get("TRIM_PE", True):
+        if reads_proc and _as_bool(config.get("TRIM_PE", True)):
             return os.path.join(base_dir, "processed", f"{read_type_lower}_Path{idx}_{base}_1_trimmed.fq.gz")
         else:
             return os.path.join(base_dir, f"{read_type_lower}_Path{idx}_{base}_1.fq.gz")
     elif read_type_lower == "hifi":
-        if config.get("FILTER_HIFI", True):
+        if reads_proc and _as_bool(config.get("FILTER_HIFI", True)):
             return os.path.join(base_dir, "processed", f"hifi_Path{idx}_{base}_filtered.fq.gz")
         else:
             return os.path.join(base_dir, f"hifi_Path{idx}_{base}.fq.gz")
     elif read_type_lower == "ont":
-        if config.get("CORRECT_ONT", True):
+        if reads_proc and _as_bool(config.get("CORRECT_ONT", False)):
             return os.path.join(base_dir, "processed", f"ont_Path{idx}_{base}_corrected.fq.gz")
         else:
             return os.path.join(base_dir, f"ont_Path{idx}_{base}.fq.gz")
@@ -51,9 +53,11 @@ def get_per_read_kmer_input(wildcards):
         "reads", read_type
     )
     
+    reads_proc = _as_bool(config.get("READS_PROC", True))
+    
     # Try to find any matching file
     if read_type == "hifi":
-        if config.get("FILTER_HIFI", True):
+        if reads_proc and _as_bool(config.get("FILTER_HIFI", True)):
             # Look for filtered files with any Path index
             import glob
             pattern = os.path.join(base_dir, "processed", f"hifi_Path*_{base}_filtered.fq.gz")
@@ -67,7 +71,7 @@ def get_per_read_kmer_input(wildcards):
                 return matches[0]
     
     elif read_type == "ont":
-        if config.get("CORRECT_ONT", True):
+        if reads_proc and _as_bool(config.get("CORRECT_ONT", False)):
             pattern = os.path.join(base_dir, "processed", f"ont_Path*_{base}_corrected.fq.gz")
             matches = glob.glob(pattern)
             if matches:
@@ -79,7 +83,7 @@ def get_per_read_kmer_input(wildcards):
                 return matches[0]
     
     elif read_type in ["illumina", "10x"]:
-        if config.get("TRIM_PE", True):
+        if reads_proc and _as_bool(config.get("TRIM_PE", True)):
             pattern = os.path.join(base_dir, "processed", f"{read_type}_Path*_{base}_1_trimmed.fq.gz")
             matches = glob.glob(pattern)
             if matches:

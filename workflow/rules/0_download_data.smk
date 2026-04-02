@@ -31,11 +31,8 @@ def get_manifest_entry(destination):
 # -------------------------------------------------------------------------------
 # WATCHDOG SETTINGS (hardcoded with generous headroom)
 # -------------------------------------------------------------------------------
-# STALL_TIMEOUT: If no download progress for this many seconds, kill the process
-# CHECK_INTERVAL: How often to check for progress
 
-WATCHDOG_STALL_TIMEOUT = 3600   # 1 hour without progress = stalled
-WATCHDOG_CHECK_INTERVAL = 1200  # Check every 20 minutes
+WATCHDOG_SCRIPT = str(BASEDIR / "scripts" / "watchdog.sh")
 
 
 # -------------------------------------------------------------------------------
@@ -203,8 +200,7 @@ rule _00_download_reads_sra_single:
     params:
         outdir = lambda w: os.path.join(w.outdir, "downloaded_data", w.species, "reads", w.read_type),
         manifest = manifest_path,
-        stall_timeout = WATCHDOG_STALL_TIMEOUT,
-        check_interval = WATCHDOG_CHECK_INTERVAL
+        watchdog = WATCHDOG_SCRIPT
     threads: cpu_func("download_data")
     resources:
         mem_mb = mem_func("download_data"),
@@ -230,46 +226,7 @@ if not found:
     sys.exit(1)
 "
         
-        # WATCHDOG FUNCTION - Kills stalled downloads
-        # -------------------------------------------------------------------
-        watchdog() {{
-            local PID=$1
-            local FILE_PATTERN="$2"
-            local TIMEOUT_SEC={params.stall_timeout}
-            local CHECK_INTERVAL={params.check_interval}
-            
-            local LAST_SIZE=-1
-            local STALL_TIME=0
-            
-            while kill -0 $PID 2>/dev/null; do
-                CURRENT_SIZE=$(du -sbc $FILE_PATTERN 2>/dev/null | tail -1 | cut -f1)
-                CURRENT_SIZE=${{CURRENT_SIZE:-0}}
-                
-                if [ "$CURRENT_SIZE" -gt "$LAST_SIZE" ]; then
-                    STALL_TIME=0
-                    LAST_SIZE=$CURRENT_SIZE
-                else
-                    STALL_TIME=$((STALL_TIME + CHECK_INTERVAL))
-                    echo "[GEP2] Watchdog: No progress for $((STALL_TIME/60)) min (current size: $CURRENT_SIZE bytes)"
-                fi
-                
-                if [ $STALL_TIME -ge $TIMEOUT_SEC ]; then
-                    echo ""
-                    echo "[GEP2] ------------------------------------------------------------"
-                    echo "[GEP2] WATCHDOG: Download stalled for $((TIMEOUT_SEC/60)) minutes"
-                    echo "[GEP2] ------------------------------------------------------------"
-                    echo "[GEP2] Last detected size: $LAST_SIZE bytes"
-                    echo "[GEP2] Killing process (PID: $PID)..."
-                    kill -TERM $PID 2>/dev/null
-                    sleep 5
-                    kill -9 $PID 2>/dev/null
-                    return 1
-                fi
-                
-                sleep $CHECK_INTERVAL
-            done
-            return 0
-        }}
+        source {params.watchdog}
         
         # CHECK IF DOWNLOAD PRODUCED FILES
         # -------------------------------------------------------------------
@@ -285,16 +242,6 @@ if not found:
                 [ -f "${{ACC}}_1.fastq.gz" ] || [ -f "${{ACC}}_1.fastq" ]
             fi
         }}
-        
-        # Cleanup trap to ensure watchdog is killed on exit
-        WATCHDOG_PID=""
-        cleanup() {{
-            if [ -n "$WATCHDOG_PID" ]; then
-                kill $WATCHDOG_PID 2>/dev/null || true
-                wait $WATCHDOG_PID 2>/dev/null || true
-            fi
-        }}
-        trap cleanup EXIT
         
         # MAIN DOWNLOAD LOGIC
         # -------------------------------------------------------------------
@@ -321,18 +268,8 @@ if not found:
             if [ "$USE_ASPERA" = "true" ]; then
                 echo "[GEP2] Trying Aspera (fast) download..."
                 
-                enaDataGet.py -a -f fastq -d . {wildcards.acc} &
-                DOWNLOAD_PID=$!
-                
-                watchdog $DOWNLOAD_PID "{wildcards.acc}* {wildcards.acc}/*" &
-                WATCHDOG_PID=$!
-                
-                wait $DOWNLOAD_PID
+                gep2_download_with_timeout 3600 enaDataGet.py -a -f fastq -d . {wildcards.acc}
                 ASPERA_EXIT=$?
-                
-                kill $WATCHDOG_PID 2>/dev/null || true
-                wait $WATCHDOG_PID 2>/dev/null || true
-                WATCHDOG_PID=""
                 
                 # Check if Aspera actually produced files (not just exit code!)
                 if check_single_files {wildcards.acc}; then
@@ -352,22 +289,44 @@ if not found:
             if [ "$USE_ASPERA" = "false" ]; then
                 echo "[GEP2] Using HTTP download..."
                 
-                enaDataGet.py -f fastq -d . {wildcards.acc} &
-                DOWNLOAD_PID=$!
-                
-                watchdog $DOWNLOAD_PID "{wildcards.acc}* {wildcards.acc}/*" &
-                WATCHDOG_PID=$!
-                
-                wait $DOWNLOAD_PID
+                gep2_download_with_timeout 3600 enaDataGet.py -f fastq -d . {wildcards.acc}
                 HTTP_EXIT=$?
-                
-                kill $WATCHDOG_PID 2>/dev/null || true
-                wait $WATCHDOG_PID 2>/dev/null || true
-                WATCHDOG_PID=""
                 
                 echo "[GEP2] HTTP download finished (exit code: $HTTP_EXIT)"
             fi
             
+            # TRY SUBMITTED FORMAT (if fastq format produced nothing)
+            # -----------------------------------------------------------------
+            if ! check_single_files {wildcards.acc}; then
+                echo "[GEP2] No FASTQ files found, trying submitted format..."
+                rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
+                
+                gep2_download_with_timeout 3600 enaDataGet.py -f submitted -d . {wildcards.acc}
+                SUBMITTED_EXIT=$?
+                
+                echo "[GEP2] Submitted files download finished (exit code: $SUBMITTED_EXIT)"
+                
+                # Rename unpredictable submitted file to standard naming
+                DIR="."
+                [ -d "{wildcards.acc}" ] && DIR="{wildcards.acc}"
+                
+                SUBMITTED=$(find "$DIR" -maxdepth 1 \( -name "*.fastq.gz" -o -name "*.fq.gz" -o -name "*.fastq" -o -name "*.fq" \) 2>/dev/null | sort | head -1)
+                
+                if [ -n "$SUBMITTED" ]; then
+                    if [[ "$SUBMITTED" == *.gz ]]; then
+                        TARGET="$DIR/{wildcards.acc}.fastq.gz"
+                    else
+                        TARGET="$DIR/{wildcards.acc}.fastq"
+                    fi
+                    
+                    echo "[GEP2] Renaming submitted file to standard naming..."
+                    echo "[GEP2]   $SUBMITTED -> $TARGET"
+                    mv "$SUBMITTED" "$TARGET"
+                else
+                    echo "[GEP2] Warning: No submitted fastq files found"
+                fi
+            fi
+
             # PROCESS AND VALIDATE FILES
             # -----------------------------------------------------------------
             
@@ -462,8 +421,7 @@ rule _00_download_reads_sra:
     params:
         outdir = lambda w: os.path.join(w.outdir, "downloaded_data", w.species, "reads", w.read_type),
         manifest = manifest_path,
-        stall_timeout = WATCHDOG_STALL_TIMEOUT,
-        check_interval = WATCHDOG_CHECK_INTERVAL
+        watchdog = WATCHDOG_SCRIPT
     threads: cpu_func("download_data")
     resources:
         mem_mb = mem_func("download_data"),
@@ -489,70 +447,21 @@ if not found:
     sys.exit(1)
 "
         
-        # WATCHDOG FUNCTION - Kills stalled downloads
-        # -------------------------------------------------------------------
-        watchdog() {{
-            local PID=$1
-            local FILE_PATTERN="$2"
-            local TIMEOUT_SEC={params.stall_timeout}
-            local CHECK_INTERVAL={params.check_interval}
-            
-            local LAST_SIZE=-1
-            local STALL_TIME=0
-            
-            while kill -0 $PID 2>/dev/null; do
-                CURRENT_SIZE=$(du -sbc $FILE_PATTERN 2>/dev/null | tail -1 | cut -f1)
-                CURRENT_SIZE=${{CURRENT_SIZE:-0}}
-                
-                if [ "$CURRENT_SIZE" -gt "$LAST_SIZE" ]; then
-                    STALL_TIME=0
-                    LAST_SIZE=$CURRENT_SIZE
-                else
-                    STALL_TIME=$((STALL_TIME + CHECK_INTERVAL))
-                    echo "[GEP2] Watchdog: No progress for $((STALL_TIME/60)) min (current size: $CURRENT_SIZE bytes)"
-                fi
-                
-                if [ $STALL_TIME -ge $TIMEOUT_SEC ]; then
-                    echo ""
-                    echo "[GEP2] ------------------------------------------------------------"
-                    echo "[GEP2] WATCHDOG: Download stalled for $((TIMEOUT_SEC/60)) minutes"
-                    echo "[GEP2] ------------------------------------------------------------"
-                    echo "[GEP2] Last detected size: $LAST_SIZE bytes"
-                    echo "[GEP2] Killing process (PID: $PID)..."
-                    kill -TERM $PID 2>/dev/null
-                    sleep 5
-                    kill -9 $PID 2>/dev/null
-                    return 1
-                fi
-                
-                sleep $CHECK_INTERVAL
-            done
-            return 0
-        }}
-        
-        # CHECK IF DOWNLOAD PRODUCED FILES
+        source {params.watchdog}
+
+        # CHECK IF DOWNLOAD PRODUCED PAIRED FILES
         # -------------------------------------------------------------------
         check_paired_files() {{
             local ACC=$1
-            # Check for files in subdirectory or current directory
             if [ -d "$ACC" ]; then
-                [ -f "$ACC/${{ACC}}_1.fastq.gz" ] || [ -f "$ACC/${{ACC}}_1.fastq" ] && \
-                [ -f "$ACC/${{ACC}}_2.fastq.gz" ] || [ -f "$ACC/${{ACC}}_2.fastq" ]
+                {{ [ -f "$ACC/${{ACC}}_1.fastq.gz" ] || [ -f "$ACC/${{ACC}}_1.fastq" ]; }} && \
+                {{ [ -f "$ACC/${{ACC}}_2.fastq.gz" ] || [ -f "$ACC/${{ACC}}_2.fastq" ]; }}
             else
-                [ -f "${{ACC}}_1.fastq.gz" ] || [ -f "${{ACC}}_1.fastq" ] && \
-                [ -f "${{ACC}}_2.fastq.gz" ] || [ -f "${{ACC}}_2.fastq" ]
+                {{ [ -f "${{ACC}}_1.fastq.gz" ] || [ -f "${{ACC}}_1.fastq" ]; }} && \
+                {{ [ -f "${{ACC}}_2.fastq.gz" ] || [ -f "${{ACC}}_2.fastq" ]; }}
             fi
         }}
-        
-        # Cleanup trap to ensure watchdog is killed on exit
-        WATCHDOG_PID=""
-        cleanup() {{
-            if [ -n "$WATCHDOG_PID" ]; then
-                kill $WATCHDOG_PID 2>/dev/null || true
-                wait $WATCHDOG_PID 2>/dev/null || true
-            fi
-        }}
-        trap cleanup EXIT
+
         
         # MAIN DOWNLOAD LOGIC
         # -------------------------------------------------------------------
@@ -579,18 +488,8 @@ if not found:
             if [ "$USE_ASPERA" = "true" ]; then
                 echo "[GEP2] Trying Aspera (fast) download..."
                 
-                enaDataGet.py -a -f fastq -d . {wildcards.acc} &
-                DOWNLOAD_PID=$!
-                
-                watchdog $DOWNLOAD_PID "{wildcards.acc}* {wildcards.acc}/*" &
-                WATCHDOG_PID=$!
-                
-                wait $DOWNLOAD_PID
+                gep2_download_with_timeout 3600 enaDataGet.py -a -f fastq -d . {wildcards.acc}
                 ASPERA_EXIT=$?
-                
-                kill $WATCHDOG_PID 2>/dev/null || true
-                wait $WATCHDOG_PID 2>/dev/null || true
-                WATCHDOG_PID=""
                 
                 # Check if Aspera actually produced files (not just exit code!)
                 if check_paired_files {wildcards.acc}; then
@@ -610,26 +509,60 @@ if not found:
             if [ "$USE_ASPERA" = "false" ]; then
                 echo "[GEP2] Using HTTP download..."
                 
-                enaDataGet.py -f fastq -d . {wildcards.acc} &
-                DOWNLOAD_PID=$!
-                
-                watchdog $DOWNLOAD_PID "{wildcards.acc}* {wildcards.acc}/*" &
-                WATCHDOG_PID=$!
-                
-                wait $DOWNLOAD_PID
+                gep2_download_with_timeout 3600 enaDataGet.py -f fastq -d . {wildcards.acc}
                 HTTP_EXIT=$?
-                
-                kill $WATCHDOG_PID 2>/dev/null || true
-                wait $WATCHDOG_PID 2>/dev/null || true
-                WATCHDOG_PID=""
                 
                 echo "[GEP2] HTTP download finished (exit code: $HTTP_EXIT)"
             fi
             
+            # TRY SUBMITTED FORMAT (if fastq format produced nothing)
+            # -----------------------------------------------------------------
+            if ! check_paired_files {wildcards.acc}; then
+                echo "[GEP2] No FASTQ files found, trying submitted format..."
+                rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
+                
+                gep2_download_with_timeout 3600 enaDataGet.py -f submitted -d . {wildcards.acc}
+                SUBMITTED_EXIT=$?
+                
+                echo "[GEP2] Submitted files download finished (exit code: $SUBMITTED_EXIT)"
+
+                # Rename unpredictable submitted files to standard naming
+                DIR="."
+                [ -d "{wildcards.acc}" ] && DIR="{wildcards.acc}"
+                
+                FASTQ_FILES=$(find "$DIR" -maxdepth 1 \( -name "*.fastq.gz" -o -name "*.fq.gz" -o -name "*.fastq" -o -name "*.fq" \) 2>/dev/null | sort)
+                NUM_FILES=$(echo "$FASTQ_FILES" | grep -c . || true)
+                
+                if [ "$NUM_FILES" -ge 2 ]; then
+                    R1=$(echo "$FASTQ_FILES" | sed -n '1p')
+                    R2=$(echo "$FASTQ_FILES" | sed -n '2p')
+                    
+                    # Detect extension to avoid renaming .fastq as .fastq.gz
+                    EXT1="${{R1##*.fastq}}"
+                    if [[ "$R1" == *.gz ]]; then
+                        TARGET_R1="$DIR/{wildcards.acc}_1.fastq.gz"
+                        TARGET_R2="$DIR/{wildcards.acc}_2.fastq.gz"
+                    else
+                        TARGET_R1="$DIR/{wildcards.acc}_1.fastq"
+                        TARGET_R2="$DIR/{wildcards.acc}_2.fastq"
+                    fi
+                    
+                    echo "[GEP2] Renaming submitted files to standard naming..."
+                    echo "[GEP2]   $R1 -> $TARGET_R1"
+                    echo "[GEP2]   $R2 -> $TARGET_R2"
+                    mv "$R1" "$TARGET_R1"
+                    mv "$R2" "$TARGET_R2"
+                else
+                    echo "[GEP2] Warning: Could not find two submitted fastq files to pair"
+                    echo "[GEP2] Files found:"
+                    echo "$FASTQ_FILES"
+                fi
+            fi
+
             # PROCESS AND VALIDATE FILES
             # -----------------------------------------------------------------
-            
-            # Move files from subdirectory if created
+
+            # Move files from subdirectory if created (fastq format downloads)
             if [ -d "{wildcards.acc}" ]; then
                 echo "[GEP2] Moving files from subdirectory..."
                 mv {wildcards.acc}/* . 2>/dev/null || true

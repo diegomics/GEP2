@@ -1,5 +1,5 @@
 # GEP2 - Genome Evaluation Pipeline 2
-GEP2_VER = "0.3.0"
+GEP2_VER = "0.3.1"
 
 # Debug verbosity (set to True for detailed DAG building messages)
 VERBOSE = False
@@ -1226,7 +1226,8 @@ def load_samples_config():
              str(SCRIPTS_DIR / "GEP2_table.attributes"),
              "-o", 
              str(yaml_output),
-             "--discover-paths", 
+             "--discover-paths",
+             "--overwrite-yaml",
              str(input_table)],
             capture_output=True, 
             text=True
@@ -1391,7 +1392,7 @@ def get_original_read_type_key(species, normalized_type):
 
 def _parse_tech_priority():
     """Parse TECH_PRIO config into ordered list"""
-    prio_str = config.get("TECH_PRIO", "illumina>hifi>ont>hic")
+    prio_str = config.get("DATA_PRIORITY", "illumina>hifi>ont>hic")
     return [t.strip().lower() for t in prio_str.split(">")]
 
 

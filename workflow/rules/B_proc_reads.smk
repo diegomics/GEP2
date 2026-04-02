@@ -770,7 +770,7 @@ rule B05_filter_hifi_adapters:
         mkdir -p $(dirname {output.filtered})
         mkdir -p $(dirname {output.report})
 
-        WORK_DIR="$(gep2_get_workdir 100)"
+        WORK_DIR="$(gep2_get_workdir 150)"
         TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_hifi_filter_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
 

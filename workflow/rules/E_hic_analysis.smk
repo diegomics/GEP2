@@ -94,6 +94,8 @@ def _get_hic_reads_for_assembly(species, asm_id):
                 
                 path_groups[idx].extend(paths)
             
+            reads_proc = _as_bool(config.get("READS_PROC", True))
+            use_trimmed = reads_proc and _as_bool(config.get("TRIM_PE", True))
             # Process each path group
             for idx, paths in sorted(path_groups.items()):
                 # Extract base names and construct processed paths
@@ -107,16 +109,20 @@ def _get_hic_reads_for_assembly(species, asm_id):
                     if base in seen_bases:
                         continue
                     seen_bases.add(base)
-                    
+                
                     base_dir = os.path.join(
                         config["OUT_FOLDER"], "GEP2_results", "data", species,
                         "reads", "hic"
                     )
                     
-                    # Hi-C reads are paired-end
-                    r1_path = os.path.join(base_dir, f"hic_Path{idx}_{base}_1.fq.gz")
-                    r2_path = os.path.join(base_dir, f"hic_Path{idx}_{base}_2.fq.gz")
-                    
+                    # Hi-C reads are paired-end — use trimmed if processing enabled
+                    if use_trimmed:
+                        r1_path = os.path.join(base_dir, "processed", f"hic_Path{idx}_{base}_1_trimmed.fq.gz")
+                        r2_path = os.path.join(base_dir, "processed", f"hic_Path{idx}_{base}_2_trimmed.fq.gz")
+                    else:
+                        r1_path = os.path.join(base_dir, f"hic_Path{idx}_{base}_1.fq.gz")
+                        r2_path = os.path.join(base_dir, f"hic_Path{idx}_{base}_2.fq.gz")
+
                     if r1_path not in r1_files:
                         r1_files.append(r1_path)
                     if r2_path not in r2_files:

@@ -55,7 +55,6 @@ def _get_long_read_type_for_assembly(species, asm_id):
 
 def _get_long_reads_for_inspector(species, asm_id, read_type):
     """Get all processed long read files for Inspector.
-    
     Returns list of processed read file paths.
     """
     reads = []
@@ -73,6 +72,9 @@ def _get_long_reads_for_inspector(species, asm_id, read_type):
                 continue
             
             read_files = rt_data.get("read_files", {})
+            
+            # Compute READS_PROC once before looping through the individual files
+            reads_proc = _as_bool(config.get("READS_PROC", True))
             
             for path_key, path_value in sorted(read_files.items()):
                 if not path_value or path_value == "None":
@@ -101,7 +103,7 @@ def _get_long_reads_for_inspector(species, asm_id, read_type):
                     )
                     
                     if read_type == "hifi":
-                        if config.get("FILTER_HIFI", True):
+                        if reads_proc and _as_bool(config.get("FILTER_HIFI", True)):
                             read_path = os.path.join(
                                 base_dir, "processed", 
                                 f"hifi_Path{idx}_{base}_filtered.fq.gz"
@@ -111,7 +113,7 @@ def _get_long_reads_for_inspector(species, asm_id, read_type):
                                 base_dir, f"hifi_Path{idx}_{base}.fq.gz"
                             )
                     elif read_type == "ont":
-                        if config.get("CORRECT_ONT", True):
+                        if reads_proc and _as_bool(config.get("CORRECT_ONT", False)):
                             read_path = os.path.join(
                                 base_dir, "processed",
                                 f"ont_Path{idx}_{base}_corrected.fq.gz"
