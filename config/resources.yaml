@@ -226,7 +226,7 @@ resources:
     max_cpu: 16
     base_mem_gb: 20
     mem_gb_per_uncompressed_gb: 48
-    runtime_min: 1440
+    runtime_min: 2880                       # 48h
 
   create_blobdir:
     max_cpu: 4
