@@ -59,7 +59,6 @@ def get_per_read_kmer_input(wildcards):
     if read_type == "hifi":
         if reads_proc and _as_bool(config.get("FILTER_HIFI", True)):
             # Look for filtered files with any Path index
-            import glob
             pattern = os.path.join(base_dir, "processed", f"hifi_Path*_{base}_filtered.fq.gz")
             matches = glob.glob(pattern)
             if matches:
