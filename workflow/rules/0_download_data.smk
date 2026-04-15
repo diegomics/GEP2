@@ -310,7 +310,7 @@ if not found:
                 DIR="."
                 [ -d "{wildcards.acc}" ] && DIR="{wildcards.acc}"
                 
-                SUBMITTED=$(find "$DIR" -maxdepth 1 \( -name "*.fastq.gz" -o -name "*.fq.gz" -o -name "*.fastq" -o -name "*.fq" \) 2>/dev/null | sort | head -1)
+                SUBMITTED=$(find "$DIR" -maxdepth 1 '(' -name "*.fastq.gz" -o -name "*.fq.gz" -o -name "*.fastq" -o -name "*.fq" ')' 2>/dev/null | sort | head -1)
                 
                 if [ -n "$SUBMITTED" ]; then
                     if [[ "$SUBMITTED" == *.gz ]]; then
@@ -530,7 +530,7 @@ if not found:
                 DIR="."
                 [ -d "{wildcards.acc}" ] && DIR="{wildcards.acc}"
                 
-                FASTQ_FILES=$(find "$DIR" -maxdepth 1 \( -name "*.fastq.gz" -o -name "*.fq.gz" -o -name "*.fastq" -o -name "*.fq" \) 2>/dev/null | sort)
+                FASTQ_FILES=$(find "$DIR" -maxdepth 1 '(' -name "*.fastq.gz" -o -name "*.fq.gz" -o -name "*.fastq" -o -name "*.fq" ')' 2>/dev/null | sort)
                 NUM_FILES=$(echo "$FASTQ_FILES" | grep -c . || true)
                 
                 if [ "$NUM_FILES" -ge 2 ]; then
