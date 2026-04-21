@@ -268,8 +268,10 @@ if not found:
             if [ "$USE_ASPERA" = "true" ]; then
                 echo "[GEP2] Trying Aspera (fast) download..."
                 
-                gep2_download_with_timeout 3600 enaDataGet.py -a -f fastq -d . {wildcards.acc}
-                ASPERA_EXIT=$?
+                # NOTE: `|| ASPERA_EXIT=$?` keeps the command off set -e's kill list.
+                # Failure here is expected (fallback drives the retry loop).
+                ASPERA_EXIT=0
+                gep2_download_with_timeout 3600 enaDataGet.py -a -f fastq -d . {wildcards.acc} || ASPERA_EXIT=$?
                 
                 # Check if Aspera actually produced files (not just exit code!)
                 if check_single_files {wildcards.acc}; then
@@ -289,8 +291,8 @@ if not found:
             if [ "$USE_ASPERA" = "false" ]; then
                 echo "[GEP2] Using HTTP download..."
                 
-                gep2_download_with_timeout 3600 enaDataGet.py -f fastq -d . {wildcards.acc}
-                HTTP_EXIT=$?
+                HTTP_EXIT=0
+                gep2_download_with_timeout 3600 enaDataGet.py -f fastq -d . {wildcards.acc} || HTTP_EXIT=$?
                 
                 echo "[GEP2] HTTP download finished (exit code: $HTTP_EXIT)"
             fi
@@ -301,8 +303,8 @@ if not found:
                 echo "[GEP2] No FASTQ files found, trying submitted format..."
                 rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
                 
-                gep2_download_with_timeout 3600 enaDataGet.py -f submitted -d . {wildcards.acc}
-                SUBMITTED_EXIT=$?
+                SUBMITTED_EXIT=0
+                gep2_download_with_timeout 3600 enaDataGet.py -f submitted -d . {wildcards.acc} || SUBMITTED_EXIT=$?
                 
                 echo "[GEP2] Submitted files download finished (exit code: $SUBMITTED_EXIT)"
                 
@@ -310,7 +312,7 @@ if not found:
                 DIR="."
                 [ -d "{wildcards.acc}" ] && DIR="{wildcards.acc}"
                 
-                SUBMITTED=$(find "$DIR" -maxdepth 1 \( -name "*.fastq.gz" -o -name "*.fq.gz" -o -name "*.fastq" -o -name "*.fq" \) 2>/dev/null | sort | head -1)
+                SUBMITTED=$(find "$DIR" -maxdepth 1 '(' -name "*.fastq.gz" -o -name "*.fq.gz" -o -name "*.fastq" -o -name "*.fq" ')' 2>/dev/null | sort | head -1)
                 
                 if [ -n "$SUBMITTED" ]; then
                     if [[ "$SUBMITTED" == *.gz ]]; then
@@ -324,6 +326,24 @@ if not found:
                     mv "$SUBMITTED" "$TARGET"
                 else
                     echo "[GEP2] Warning: No submitted fastq files found"
+                fi
+            fi
+
+            # TRY ENA PORTAL API + HTTPS (last-resort fallback)
+            # -----------------------------------------------------------------
+            # Handles submissions where enaDataGet.py returns "no files" or
+            # crashes, e.g., submissions with FASTQ only in submitted_ftp, not fastq_ftp.
+            if ! check_single_files {wildcards.acc}; then
+                echo "[GEP2] Trying ENA portal API + HTTPS as last resort..."
+                rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
+                
+                API_EXIT=0
+                gep2_ena_download_single {wildcards.acc} || API_EXIT=$?
+                
+                if [ "$API_EXIT" -eq 0 ] && check_single_files {wildcards.acc}; then
+                    echo "[GEP2] Portal-API download produced files"
+                else
+                    echo "[GEP2] Portal-API fallback failed (exit $API_EXIT)"
                 fi
             fi
 
@@ -488,8 +508,10 @@ if not found:
             if [ "$USE_ASPERA" = "true" ]; then
                 echo "[GEP2] Trying Aspera (fast) download..."
                 
-                gep2_download_with_timeout 3600 enaDataGet.py -a -f fastq -d . {wildcards.acc}
-                ASPERA_EXIT=$?
+                # NOTE: `|| ASPERA_EXIT=$?` keeps the command off set -e's kill list.
+                # Failure here is expected (fallback drives the retry loop).
+                ASPERA_EXIT=0
+                gep2_download_with_timeout 3600 enaDataGet.py -a -f fastq -d . {wildcards.acc} || ASPERA_EXIT=$?
                 
                 # Check if Aspera actually produced files (not just exit code!)
                 if check_paired_files {wildcards.acc}; then
@@ -509,8 +531,8 @@ if not found:
             if [ "$USE_ASPERA" = "false" ]; then
                 echo "[GEP2] Using HTTP download..."
                 
-                gep2_download_with_timeout 3600 enaDataGet.py -f fastq -d . {wildcards.acc}
-                HTTP_EXIT=$?
+                HTTP_EXIT=0
+                gep2_download_with_timeout 3600 enaDataGet.py -f fastq -d . {wildcards.acc} || HTTP_EXIT=$?
                 
                 echo "[GEP2] HTTP download finished (exit code: $HTTP_EXIT)"
             fi
@@ -521,8 +543,8 @@ if not found:
                 echo "[GEP2] No FASTQ files found, trying submitted format..."
                 rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
                 
-                gep2_download_with_timeout 3600 enaDataGet.py -f submitted -d . {wildcards.acc}
-                SUBMITTED_EXIT=$?
+                SUBMITTED_EXIT=0
+                gep2_download_with_timeout 3600 enaDataGet.py -f submitted -d . {wildcards.acc} || SUBMITTED_EXIT=$?
                 
                 echo "[GEP2] Submitted files download finished (exit code: $SUBMITTED_EXIT)"
 
@@ -530,7 +552,7 @@ if not found:
                 DIR="."
                 [ -d "{wildcards.acc}" ] && DIR="{wildcards.acc}"
                 
-                FASTQ_FILES=$(find "$DIR" -maxdepth 1 \( -name "*.fastq.gz" -o -name "*.fq.gz" -o -name "*.fastq" -o -name "*.fq" \) 2>/dev/null | sort)
+                FASTQ_FILES=$(find "$DIR" -maxdepth 1 '(' -name "*.fastq.gz" -o -name "*.fq.gz" -o -name "*.fastq" -o -name "*.fq" ')' 2>/dev/null | sort)
                 NUM_FILES=$(echo "$FASTQ_FILES" | grep -c . || true)
                 
                 if [ "$NUM_FILES" -ge 2 ]; then
@@ -556,6 +578,24 @@ if not found:
                     echo "[GEP2] Warning: Could not find two submitted fastq files to pair"
                     echo "[GEP2] Files found:"
                     echo "$FASTQ_FILES"
+                fi
+            fi
+
+            # TRY ENA PORTAL API + HTTPS (last-resort fallback)
+            # -----------------------------------------------------------------
+             # Handles submissions where enaDataGet.py returns "no files" or
+            # crashes, e.g., submissions with FASTQ only in submitted_ftp, not fastq_ftp.
+            if ! check_paired_files {wildcards.acc}; then
+                echo "[GEP2] Trying ENA portal API + HTTPS as last resort..."
+                rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
+                
+                API_EXIT=0
+                gep2_ena_download_paired {wildcards.acc} || API_EXIT=$?
+                
+                if [ "$API_EXIT" -eq 0 ] && check_paired_files {wildcards.acc}; then
+                    echo "[GEP2] Portal-API download produced files"
+                else
+                    echo "[GEP2] Portal-API fallback failed (exit $API_EXIT)"
                 fi
             fi
 
