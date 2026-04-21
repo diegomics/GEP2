@@ -271,7 +271,7 @@ if not found:
                 # NOTE: `|| ASPERA_EXIT=$?` keeps the command off set -e's kill list.
                 # Failure here is expected (fallback drives the retry loop).
                 ASPERA_EXIT=0
-                gep2_download_with_timeout 3600 enaDataGet.py -a -f fastq -d . {wildcards.acc} || ASPERA_EXIT=$?
+                gep2_download_with_timeout 14400 enaDataGet.py -a -f fastq -d . {wildcards.acc} || ASPERA_EXIT=$?
                 
                 # Check if Aspera actually produced files (not just exit code!)
                 if check_single_files {wildcards.acc}; then
@@ -292,7 +292,7 @@ if not found:
                 echo "[GEP2] Using HTTP download..."
                 
                 HTTP_EXIT=0
-                gep2_download_with_timeout 3600 enaDataGet.py -f fastq -d . {wildcards.acc} || HTTP_EXIT=$?
+                gep2_download_with_timeout 14400 enaDataGet.py -f fastq -d . {wildcards.acc} || HTTP_EXIT=$?
                 
                 echo "[GEP2] HTTP download finished (exit code: $HTTP_EXIT)"
             fi
@@ -304,7 +304,7 @@ if not found:
                 rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
                 
                 SUBMITTED_EXIT=0
-                gep2_download_with_timeout 3600 enaDataGet.py -f submitted -d . {wildcards.acc} || SUBMITTED_EXIT=$?
+                gep2_download_with_timeout 14400 enaDataGet.py -f submitted -d . {wildcards.acc} || SUBMITTED_EXIT=$?
                 
                 echo "[GEP2] Submitted files download finished (exit code: $SUBMITTED_EXIT)"
                 
@@ -511,7 +511,7 @@ if not found:
                 # NOTE: `|| ASPERA_EXIT=$?` keeps the command off set -e's kill list.
                 # Failure here is expected (fallback drives the retry loop).
                 ASPERA_EXIT=0
-                gep2_download_with_timeout 3600 enaDataGet.py -a -f fastq -d . {wildcards.acc} || ASPERA_EXIT=$?
+                gep2_download_with_timeout 14400 enaDataGet.py -a -f fastq -d . {wildcards.acc} || ASPERA_EXIT=$?
                 
                 # Check if Aspera actually produced files (not just exit code!)
                 if check_paired_files {wildcards.acc}; then
@@ -532,7 +532,7 @@ if not found:
                 echo "[GEP2] Using HTTP download..."
                 
                 HTTP_EXIT=0
-                gep2_download_with_timeout 3600 enaDataGet.py -f fastq -d . {wildcards.acc} || HTTP_EXIT=$?
+                gep2_download_with_timeout 14400 enaDataGet.py -f fastq -d . {wildcards.acc} || HTTP_EXIT=$?
                 
                 echo "[GEP2] HTTP download finished (exit code: $HTTP_EXIT)"
             fi
@@ -544,7 +544,7 @@ if not found:
                 rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
                 
                 SUBMITTED_EXIT=0
-                gep2_download_with_timeout 3600 enaDataGet.py -f submitted -d . {wildcards.acc} || SUBMITTED_EXIT=$?
+                gep2_download_with_timeout 14400 enaDataGet.py -f submitted -d . {wildcards.acc} || SUBMITTED_EXIT=$?
                 
                 echo "[GEP2] Submitted files download finished (exit code: $SUBMITTED_EXIT)"
 
