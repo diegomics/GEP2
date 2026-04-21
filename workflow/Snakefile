@@ -447,10 +447,67 @@ def _parse_fast_paths_from_profiles():
     found_paths.sort(key=lambda x: x[0])
     return [p[1] for p in found_paths]
 
+def _check_apptainer_binds():
+    """
+    Report the --bind configuration from both execution profiles and warn
+    when a profile has apptainer-args set but no --bind flags.
+    Silence with: GEP2_QUIET_BIND_CHECK=1
+    """
+    if os.environ.get("GEP2_QUIET_BIND_CHECK"):
+        return
+
+    profiles = {
+        "slurm": BASEDIR.parent / "execution" / "slurm" / "config.yaml",
+        "local": BASEDIR.parent / "execution" / "local" / "config.yaml",
+    }
+
+    print("[GEP2]")
+    print("[GEP2] ⚠️ Container bind configuration:")
+    any_missing = False
+
+    for name, profile_path in profiles.items():
+        if not profile_path.exists():
+            continue
+        try:
+            with open(profile_path) as f:
+                profile_config = yaml.safe_load(f) or {}
+        except Exception as e:
+            print(f"[GEP2]   {name}: could not parse {profile_path}: {e}")
+            continue
+
+        args = (profile_config.get("apptainer-args", "") or
+                profile_config.get("singularity-args", "") or "").strip()
+
+        # Parse both --bind X and -B X forms
+        binds = re.findall(r'(?:--bind|-B)\s+(\S+)', args)
+
+        if not binds:
+            any_missing = True
+            if args:
+                print(f"[GEP2]   {name}: apptainer-args set but no --bind found")
+                print(f"[GEP2]           (value: {args!r})")
+            else:
+                print(f"[GEP2]   {name}: apptainer-args is empty - no extra binds configured")
+        else:
+            # Show bind sources (left side of src:dst) since that's what
+            # determines which host paths are visible inside the container
+            sources = [b.split(":", 1)[0] for b in binds]
+            print(f"[GEP2]   {name}: binds {', '.join(sources)}")
+
+    if any_missing:
+        print("[GEP2] ⚠️ Remember to add the parent paths to your input/output/temp data folders to apptainer-args in the relevant profile, e.g.:")
+        print("[GEP2]   apptainer-args: \"--bind /scratch/me:/scratch/me\"")
+        print("[GEP2]  (note that dry runs won't catch this - the failure shows up once a rule actually runs inside the container.")
+        print("[GEP2]")
 
 # Default fallback is always available
 FALLBACK_TMP = os.path.join(config["OUT_FOLDER"], "GEP2_results", "tmp")
 os.makedirs(FALLBACK_TMP, exist_ok=True)
+
+# Report container bind config (informational - helps diagnose
+# "file not found inside container" failures before they happen)
+if IS_MAIN:
+    _check_apptainer_binds()
 
 # --- Parse TEMP_DIR config ---
 _temp_dir_raw = str(config.get("TEMP_DIR", "")).strip().lower()
@@ -613,12 +670,14 @@ def download_data_table(url: str, output_dir: Path) -> Path:
     
     if output_path.exists():
         print(f"[GEP2] Using cached data table: {output_path}")
+        print(f"[GEP2]")
         return output_path
     
     print(f"[GEP2] Downloading data table...")
     try:
         urllib.request.urlretrieve(url, output_path)
         print(f"[GEP2] Data table downloaded to: {output_path}")
+        print(f"[GEP2]")
     except (URLError, HTTPError) as e:
         raise ValueError(f"Failed to download data table from {url}: {e}")
     
