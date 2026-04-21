@@ -1,5 +1,5 @@
 # GEP2 - Genome Evaluation Pipeline 2
-GEP2_VER = "0.3.1"
+GEP2_VER = "0.3.2"
 
 # Debug verbosity (set to True for detailed DAG building messages)
 VERBOSE = False
@@ -497,7 +497,7 @@ def _check_apptainer_binds():
     if any_missing:
         print("[GEP2] ⚠️ Remember to add the parent paths to your input/output/temp data folders to apptainer-args in the relevant profile, e.g.:")
         print("[GEP2]   apptainer-args: \"--bind /scratch/me:/scratch/me\"")
-        print("[GEP2]  (note that dry runs won't catch this - the failure shows up once a rule actually runs inside the container.")
+        print("[GEP2]  (note that dry runs won't catch this - the failure shows up once a rule actually runs inside the container)")
         print("[GEP2]")
 
 # Default fallback is always available
