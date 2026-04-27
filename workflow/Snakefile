@@ -1,5 +1,5 @@
 # GEP2 - Genome Evaluation Pipeline 2
-GEP2_VER = "0.3.2"
+GEP2_VER = "0.3.3"
 
 # Debug verbosity (set to True for detailed DAG building messages)
 VERBOSE = False

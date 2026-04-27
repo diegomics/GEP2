@@ -244,7 +244,7 @@ def _get_qc_reports_for_multiqc(w):
                 
                 if config.get("FILTER_HIFI", True):
                     reports.extend([
-                        os.path.join(report_dir, f"{rt_lower}_Path{idx}_{base}_haf_mqc.yaml"),
+                        os.path.join(report_dir, f"{rt_lower}_Path{idx}_{base}_bbduk.stats"),
                         os.path.join(report_dir, f"{rt_lower}_Path{idx}_{base}_filtered_nanoplot")
                     ])
                 else:
@@ -729,23 +729,19 @@ EOF
 
 
 rule B05_filter_hifi_adapters:
-    """Filter HiFi reads with HiFiAdapterFilt."""
+    """Filter HiFi reads containing SMRTbell adapter sequences using bbduk."""
     input:
-        reads = _get_hifiasm_input
+        reads = _get_hifiasm_input,
+        adapters = workflow.source_path("../scripts/hifi_blocklist.fa")
     output:
         filtered = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
             "reads", "{read_type}", "processed", "{read_type}_Path{idx}_{base}_filtered.fq.gz"
         ),
-        report = os.path.join(
+        bbduk_stats = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
             "reads", "{read_type}", "processed", "reports",
-            "{read_type}_Path{idx}_{base}_haf_mqc.yaml"
-        ),
-        stats = os.path.join(
-            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
-            "reads", "{read_type}", "processed", "reports",
-            "{read_type}_Path{idx}_{base}_haf.stats"
+            "{read_type}_Path{idx}_{base}_bbduk.stats"
         )
     wildcard_constraints:
         read_type = r"(hifi)",
@@ -760,58 +756,24 @@ rule B05_filter_hifi_adapters:
         os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
             "reads", "{read_type}", "logs",
-            "B05_hifiadapterfilt.{read_type}_Path{idx}_{base}.log"
+            "B05_bbduk.{read_type}_Path{idx}_{base}.log"
         )
     shell:
         r'''
         set -euo pipefail
         exec > {log} 2>&1
-        
+
         mkdir -p $(dirname {output.filtered})
-        mkdir -p $(dirname {output.report})
+        mkdir -p $(dirname {output.bbduk_stats})
 
-        WORK_DIR="$(gep2_get_workdir 250)"
-        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_hifi_filter_XXXXXX")"
-        trap 'rm -rf "$TEMP_DIR"' EXIT
-
-        export PATH="/opt/HiFiAdapterFilt/DB:/opt/HiFiAdapterFilt:$PATH"
-
-        cd "$TEMP_DIR"
-        
-        tot=$(zcat {input.reads} | awk 'NR%4==1' | wc -l)
-        
-        ln -s {input.reads} input.fq.gz
-        
-        /opt/HiFiAdapterFilt/hifiadapterfilt.sh -p input -t {threads} -o .
-        
-        mv input.filt.fastq.gz {output.filtered}
-        
-        if [[ -f "input.stats" ]]; then
-            cp input.stats {output.stats}
-        else
-            echo "No stats file produced" > {output.stats}
-        fi
-        
-        kept=$(zcat {output.filtered} | awk 'NR%4==1' | wc -l)
-        rem=$((tot - kept))
-        pct=$(awk -v r="$rem" -v t="$tot" 'BEGIN{{printf("%.2f", t>0 ? 100*r/t : 0)}}')
-        
-        cat > {output.report} << EOF
-id: "hifiadapterfilt"
-section_name: "HiFiAdapterFilt"
-description: "HiFi adapter filtering statistics"
-plot_type: "generalstats"
-headers:
-  - haf_removed_pct:
-      title: "Removed %"
-      max: 100
-      min: 0
-      suffix: "%"
-      scale: "RdYlGn-rev"
-data:
-  {wildcards.read_type}_Path{wildcards.idx}_{wildcards.base}:
-    haf_removed_pct: $pct
-EOF
+        bbduk.sh -Xmx$(({resources.mem_mb} * 85 / 100))m \
+            in={input.reads} \
+            out={output.filtered} \
+            ref={input.adapters} \
+            stats={output.bbduk_stats} \
+            k=27 hdist=1 rcomp=t \
+            threads={threads} \
+            overwrite=t
         '''
 
 
