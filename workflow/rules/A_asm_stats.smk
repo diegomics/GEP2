@@ -63,7 +63,6 @@ rule A01_gfastats:
         gfastats {input.asm} \
             --threads {threads} \
             --nstar-report \
-            --discover-paths \
             > {output.stats}
         
         echo "[GEP2] gfastats completed: {output.stats}"
