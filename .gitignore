@@ -36,3 +36,13 @@ __pycache__/
 *.swp
 *~
 
+# --- Other stuff
+.cache/
+.config/
+.keras/
+.parallel/
+.vscode/
+.env
+.venv/
+busco_lineages/
+logs/
