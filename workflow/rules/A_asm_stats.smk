@@ -171,3 +171,103 @@ rule A02_compleasm:
         
         echo "[GEP2] compleasm completed successfully"
         """
+
+rule A02_busco:
+    """Assess assembly completeness with BUSCO"""
+    input:
+        asm = get_assembly_input
+    output:
+        summary = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{assembly}",
+            "busco", "{asm_basename}", "{asm_basename}_summary.txt"
+        ),
+        archive = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{assembly}",
+            "busco", "{asm_basename}", "{asm_basename}_results.tar.gz"
+        )
+    params:
+        outdir = lambda w: os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", w.species, w.assembly,
+            "busco", w.asm_basename
+        ),
+        lineage = "eukaryota_odb12",
+        db_dir = BUSCO_DB_DIR
+    threads: cpu_func("compleasm")
+    resources:
+        mem_mb = mem_func("compleasm"),
+        runtime = time_func("compleasm")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{assembly}",
+            "logs", "A02_busco_{asm_basename}.log"
+        )
+    benchmark:
+        os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{assembly}",
+            "logs", "A02_busco_{asm_basename}_benchmark.txt"
+        )
+    shell:
+        r'''
+        set -euo pipefail
+        mkdir -p "{params.outdir}" "$(dirname {log})"
+        exec > "{log}" 2>&1
+
+       echo "[GEP2] Running BUSCO on {input.asm}"
+        # temp workspace
+        BASE="${{GEP2_TMP:-$TMPDIR}}"
+        mkdir -p "$BASE" 2>/dev/null || BASE="$TMPDIR"
+
+        WORKDIR="$(mktemp -d "$BASE/GEP2_busco_{wildcards.species}_{wildcards.asm_basename}_XXXXXX")"
+
+        cd "$WORKDIR"
+
+        # Run BUSCO
+        busco \
+            -i "{input.asm}" \
+            -o "{wildcards.asm_basename}" \
+            -m genome \
+            -c {threads} \
+            --auto-lineage-euk \
+            --out_path "$WORKDIR" \
+            --download_path "{params.db_dir}"
+
+        echo "[GEP2] BUSCO run finished"
+
+        RUN_DIR="$WORKDIR/{wildcards.asm_basename}"
+
+        # =========================
+        # HANDLE SUMMARY
+        # =========================
+        SUMMARY_FILE=$(find "$RUN_DIR" -maxdepth 1 -name "short_summary*.txt" | head -1)
+
+        if [ -n "$SUMMARY_FILE" ]; then
+            mkdir -p "$(dirname {output.summary})"
+            cp "$SUMMARY_FILE" "{output.summary}"
+        else
+            echo "[GEP2] WARNING: No BUSCO summary found"
+            touch "{output.summary}"
+        fi
+
+        # =========================
+        # ARCHIVE RESULTS
+        # =========================
+        mkdir -p "$(dirname {output.archive})"
+        TB="{output.archive}"
+
+        cd "$RUN_DIR"
+
+        tar -czf "$TB" .
+
+        # validate archive
+        gzip -t "$TB"
+        tar -tzf "$TB" >/dev/null
+
+        echo "[GEP2] Archive created: $TB"
+
+        # cleanup
+        cd /
+        rm -rf "$WORKDIR"
+
+        echo "[GEP2] BUSCO completed successfully"
+        '''

@@ -45,6 +45,9 @@ DB_FOLDER: "auto"
 # Run gene completeness analysis
 RUN_COMPL: on
 
+# Use BUSCO instead of COMPLEASM
+PREFER_BUSCO: on
+
 # BUSCO lineage to use
 ## Options: "auto" (searches for best matching lineage in addition to eukaryota, but may fail!), 
 ## or specific lineage name (e.g., eukaryota, primates, insecta, fungi, etc)

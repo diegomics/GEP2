@@ -314,6 +314,10 @@ if missing:
 out_folder = Path(config["OUT_FOLDER"]) / "GEP2_results"
 out_folder.mkdir(parents=True, exist_ok=True)
 
+# ----- BUSCO-SWITCH: -----
+RUN_COMPL = _as_bool(config.get("RUN_COMPL", True))
+PREFER_BUSCO = _as_bool(config.get("PREFER_BUSCO", False))
+
 # Now set the missing input placeholder
 _MISSING_IN = os.path.join(
     config["OUT_FOLDER"], "GEP2_results", ".missing_input_placeholder_DO_NOT_CREATE"
@@ -1733,13 +1737,14 @@ def _get_unique_reads_for_species(species, read_type):
 # -------------------------------------------------------------------------------
 
 def get_asm_stats_results():
-    """Get expected assembly stats outputs, respecting RUN_COMPL flag"""
+    """Get expected assembly stats outputs, respecting RUN_COMPL and PREFER_BUSCO flags"""
     expected_files = []
     
     if not samples_config or "sp_name" not in samples_config:
         return expected_files
     
-    run_compl = _as_bool(config.get("RUN_COMPL", True))
+    run_compl = RUN_COMPL
+    use_busco = PREFER_BUSCO
     
     for species, species_data in samples_config["sp_name"].items():
         if not species_data or "asm_id" not in species_data:
@@ -1759,15 +1764,22 @@ def get_asm_stats_results():
                 asm_basename = get_assembly_basename(asm_path)
                 base_path = os.path.join(out_folder, species, assembly)
                 
+                # always include gfastats
                 expected_files.append(
                     os.path.join(base_path, "gfastats", f"{asm_basename}_stats.txt")
                 )
                 
                 if run_compl:
-                    expected_files.extend([
-                        os.path.join(base_path, "compleasm", asm_basename, f"{asm_basename}_summary.txt"),
-                        os.path.join(base_path, "compleasm", asm_basename, f"{asm_basename}_results.tar.gz")
-                    ])
+                    if use_busco:
+                        expected_files.extend([
+                            os.path.join(base_path, "busco", asm_basename, f"{asm_basename}_summary.txt"),
+                            os.path.join(base_path, "busco", asm_basename, f"{asm_basename}_results.tar.gz")
+                        ])
+                    else:
+                        expected_files.extend([
+                            os.path.join(base_path, "compleasm", asm_basename, f"{asm_basename}_summary.txt"),
+                            os.path.join(base_path, "compleasm", asm_basename, f"{asm_basename}_results.tar.gz")
+                        ])
     
     return expected_files
 
