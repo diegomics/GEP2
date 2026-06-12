@@ -1,5 +1,7 @@
 # GEP2 - Genome Evaluation Pipeline 2
-GEP2_VER = "0.3.3"
+# by Diego De Panis, 2025
+# note: AI tools may have been used to improve, clean and/or comment this version of the code
+GEP2_VER = "0.4"
 
 # Debug verbosity (set to True for detailed DAG building messages)
 VERBOSE = False
@@ -48,6 +50,7 @@ else:
     DB_FOLDER = _db_folder_raw
 
 BUSCO_DB_DIR = os.path.join(DB_FOLDER, "busco_lineages")
+BUSCO_DOWNLOAD_DIR = os.path.join(DB_FOLDER, "busco_downloads")
 FCS_GX_DIR = os.path.join(DB_FOLDER, "fcs_gx")
 TAXDUMP_DIR = os.path.join(DB_FOLDER, "taxdump")
 UNIPROT_DIR     = os.path.join(DB_FOLDER, "uniprot")
@@ -1733,13 +1736,14 @@ def _get_unique_reads_for_species(species, read_type):
 # -------------------------------------------------------------------------------
 
 def get_asm_stats_results():
-    """Get expected assembly stats outputs, respecting RUN_COMPL flag"""
+    """Get expected assembly stats outputs, respecting RUN_COMPL and PREFER_BUSCO flags"""
     expected_files = []
     
     if not samples_config or "sp_name" not in samples_config:
         return expected_files
     
     run_compl = _as_bool(config.get("RUN_COMPL", True))
+    use_busco = _as_bool(config.get("PREFER_BUSCO", False))
     
     for species, species_data in samples_config["sp_name"].items():
         if not species_data or "asm_id" not in species_data:
@@ -1759,16 +1763,23 @@ def get_asm_stats_results():
                 asm_basename = get_assembly_basename(asm_path)
                 base_path = os.path.join(out_folder, species, assembly)
                 
+                # always include gfastats
                 expected_files.append(
                     os.path.join(base_path, "gfastats", f"{asm_basename}_stats.txt")
                 )
-                
+
                 if run_compl:
-                    expected_files.extend([
-                        os.path.join(base_path, "compleasm", asm_basename, f"{asm_basename}_summary.txt"),
-                        os.path.join(base_path, "compleasm", asm_basename, f"{asm_basename}_results.tar.gz")
-                    ])
-    
+                    if use_busco:
+                        expected_files.extend([
+                            os.path.join(base_path, "busco", asm_basename, f"{asm_basename}_summary.txt"),
+                            os.path.join(base_path, "busco", asm_basename, f"{asm_basename}_results.tar.gz")
+                        ])
+                    else:
+                        expected_files.extend([
+                            os.path.join(base_path, "compleasm", asm_basename, f"{asm_basename}_summary.txt"),
+                            os.path.join(base_path, "compleasm", asm_basename, f"{asm_basename}_results.tar.gz")
+                        ])
+
     return expected_files
 
 

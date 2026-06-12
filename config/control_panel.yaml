@@ -51,6 +51,9 @@ RUN_COMPL: on
 ### get the lineage names here: https://busco-data.ezlab.org/v5/data/lineages/
 LINEAGE: eukaryota
 
+# Use BUSCO instead of COMPLEASM | on / off (default)
+PREFER_BUSCO: off
+
 
 # Read processing ---------------------------------------------------------------------------------
 

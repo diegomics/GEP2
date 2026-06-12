@@ -82,9 +82,9 @@ with open('{params.manifest}') as f:
     manifest = json.load(f)
 for item in manifest:
     if item.get('type') == 'assembly' and item['destination'] == '{output.asm}':
-        print(item['source'] + '|||' + item['method'])
+        print(item['source'])
+        print(item['method'])
         sys.exit(0)
-print('')
 sys.exit(0)
 ")
         
@@ -93,8 +93,8 @@ sys.exit(0)
             exit 1
         fi
         
-        SOURCE=$(echo "$MANIFEST_INFO" | cut -d'|' -f1)
-        METHOD=$(echo "$MANIFEST_INFO" | cut -d'|' -f4)
+        SOURCE=$(echo "$MANIFEST_INFO" | sed -n '1p')
+        METHOD=$(echo "$MANIFEST_INFO" | sed -n '2p')
         
         mkdir -p $(dirname {output.asm})
         
@@ -232,17 +232,33 @@ if not found:
         # -------------------------------------------------------------------
         check_single_files() {{
             local ACC=$1
-            # Check for files in subdirectory or current directory
-            # Single-end can come as ACC.fastq.gz, ACC.fastq, ACC_1.fastq.gz, or ACC_1.fastq
-            if [ -d "$ACC" ]; then
-                [ -f "$ACC/${{ACC}}.fastq.gz" ] || [ -f "$ACC/${{ACC}}.fastq" ] || \
-                [ -f "$ACC/${{ACC}}_1.fastq.gz" ] || [ -f "$ACC/${{ACC}}_1.fastq" ]
-            else
-                [ -f "${{ACC}}.fastq.gz" ] || [ -f "${{ACC}}.fastq" ] || \
-                [ -f "${{ACC}}_1.fastq.gz" ] || [ -f "${{ACC}}_1.fastq" ]
-            fi
+            local DIR="."
+            [ -d "$ACC" ] && DIR="$ACC"
+            local SIZE
+            
+            # Compressed: must be >= 1 KB AND pass gzip integrity
+            for f in "$DIR/${{ACC}}.fastq.gz" "$DIR/${{ACC}}_1.fastq.gz"; do
+                if [ -f "$f" ]; then
+                    SIZE=$(stat -c%s "$f" 2>/dev/null || echo "0")
+                    if [ "$SIZE" -ge 1024 ] && gzip -t "$f" 2>/dev/null; then
+                        return 0
+                    fi
+                fi
+            done
+            
+            # Uncompressed: must be >= 1 KB (gzip check N/A)
+            for f in "$DIR/${{ACC}}.fastq" "$DIR/${{ACC}}_1.fastq"; do
+                if [ -f "$f" ]; then
+                    SIZE=$(stat -c%s "$f" 2>/dev/null || echo "0")
+                    if [ "$SIZE" -ge 1024 ]; then
+                        return 0
+                    fi
+                fi
+            done
+            
+            return 1
         }}
-        
+
         # MAIN DOWNLOAD LOGIC
         # -------------------------------------------------------------------
         echo "[GEP2] Downloading single-end/long reads: {wildcards.acc}"
@@ -252,7 +268,7 @@ if not found:
         
         MAX_RETRIES=3
         RETRY_DELAY=60
-        USE_ASPERA=true  # Start with Aspera, switch to HTTP if it fails
+        USE_ARIA2=true  # Start with aria2c, switch to enaDataGet HTTP if it fails
         
         for ATTEMPT in $(seq 1 $MAX_RETRIES); do
             echo ""
@@ -263,38 +279,55 @@ if not found:
             # Clean slate for this attempt
             rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
             
-            # TRY ASPERA FIRST (if not already known to fail)
+            # TRY ARIA2C FAST DOWNLOAD (parallel HTTPS via ENA portal API)
             # -----------------------------------------------------------------
-            if [ "$USE_ASPERA" = "true" ]; then
-                echo "[GEP2] Trying Aspera (fast) download..."
-                
-                # NOTE: `|| ASPERA_EXIT=$?` keeps the command off set -e's kill list.
-                # Failure here is expected (fallback drives the retry loop).
-                ASPERA_EXIT=0
-                gep2_download_with_timeout 14400 enaDataGet.py -a -f fastq -d . {wildcards.acc} || ASPERA_EXIT=$?
-                
-                # Check if Aspera actually produced files (not just exit code!)
-                if check_single_files {wildcards.acc}; then
-                    echo "[GEP2] Aspera download produced files"
+            if [ "$USE_ARIA2" = "true" ]; then
+                echo "[GEP2] Trying aria2c (parallel HTTPS) download..."
+
+                URLS=$(gep2_ena_get_urls {wildcards.acc} single)
+                URLS_EXIT=$?
+
+                if [ "$URLS_EXIT" -eq 0 ] && [ -n "$URLS" ]; then
+                    URL=$(echo "$URLS" | sed -n '1p')
+                    echo "[GEP2]   URL: $URL"
+
+                    # NOTE: `|| ARIA_EXIT=$?` keeps the command off set -e's kill list.
+                    # Failure here is expected (fallback drives the retry loop).
+                    ARIA_EXIT=0
+                    gep2_download_with_timeout 14400 aria2c \
+                        -x 16 -s 16 -c \
+                        --max-tries=3 --retry-wait=10 \
+                        --allow-overwrite=true \
+                        --auto-file-renaming=false \
+                        --file-allocation=none \
+                        --console-log-level=warn --summary-interval=30 \
+                        -d . "$URL" || ARIA_EXIT=$?
+
+                    # Check if aria2c actually produced valid files (not just exit code!)
+                    if check_single_files {wildcards.acc}; then
+                        echo "[GEP2] aria2c download produced files"
+                    else
+                        echo "[GEP2] aria2c failed or produced no valid files (exit $ARIA_EXIT)"
+                        echo "[GEP2] Falling back to enaDataGet HTTP..."
+                        USE_ARIA2=false
+                        rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
+                    fi
                 else
-                    echo "[GEP2] Aspera failed or produced no files (exit code: $ASPERA_EXIT)"
-                    echo "[GEP2] Falling back to HTTP..."
-                    USE_ASPERA=false
-                    
-                    # Clean up any partial Aspera artifacts
-                    rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
+                    echo "[GEP2] Could not get URLs from ENA portal API (exit $URLS_EXIT)"
+                    echo "[GEP2] Falling back to enaDataGet HTTP..."
+                    USE_ARIA2=false
                 fi
             fi
-            
-            # TRY HTTP (if Aspera failed or was skipped)
+
+            # TRY ENADATAGET HTTP (if aria2c failed or was skipped)
             # -----------------------------------------------------------------
-            if [ "$USE_ASPERA" = "false" ]; then
-                echo "[GEP2] Using HTTP download..."
-                
+            if [ "$USE_ARIA2" = "false" ]; then
+                echo "[GEP2] Using enaDataGet HTTP download..."
+
                 HTTP_EXIT=0
                 gep2_download_with_timeout 14400 enaDataGet.py -f fastq -d . {wildcards.acc} || HTTP_EXIT=$?
-                
-                echo "[GEP2] HTTP download finished (exit code: $HTTP_EXIT)"
+
+                echo "[GEP2] enaDataGet HTTP finished (exit code: $HTTP_EXIT)"
             fi
             
             # TRY SUBMITTED FORMAT (if fastq format produced nothing)
@@ -356,17 +389,24 @@ if not found:
                 mv {wildcards.acc}/* . 2>/dev/null || true
                 rmdir {wildcards.acc} 2>/dev/null || true
             fi
+
+            # Compress any uncompressed fastq files
+            for f in {wildcards.acc}*.fastq; do
+                if [ -f "$f" ]; then
+                    echo "[GEP2] Compressing $f..."
+                    pigz -p {threads} "$f"
+                fi
+            done
             
-            # Handle different naming conventions from ENA
-            # Single-end sometimes comes as _1.fastq even without a _2
-            if [ -f "{wildcards.acc}_1.fastq" ] && [ ! -f "{wildcards.acc}_2.fastq" ]; then
-                echo "[GEP2] Renaming _1.fastq to .fastq (single-end file)..."
-                mv "{wildcards.acc}_1.fastq" "{wildcards.acc}.fastq"
-            elif [ -f "{wildcards.acc}_1.fastq.gz" ] && [ ! -f "{wildcards.acc}_2.fastq.gz" ]; then
-                echo "[GEP2] Renaming _1.fastq.gz to .fastq.gz (single-end file)..."
-                mv "{wildcards.acc}_1.fastq.gz" "{wildcards.acc}.fastq.gz"
-            fi
-            
+            # Rename variant files (_1, _subreads, etc.) to standard name
+            for f in {wildcards.acc}_*.fastq.gz; do
+                if [ -f "$f" ] && [ "$f" != "{wildcards.acc}.fastq.gz" ]; then
+                    echo "[GEP2] Renaming $f to {wildcards.acc}.fastq.gz"
+                    mv "$f" "{wildcards.acc}.fastq.gz"
+                    break
+                fi
+            done
+
             # Compress if needed
             if [ -f "{wildcards.acc}.fastq" ]; then
                 echo "[GEP2] Compressing..."
@@ -473,13 +513,30 @@ if not found:
         # -------------------------------------------------------------------
         check_paired_files() {{
             local ACC=$1
-            if [ -d "$ACC" ]; then
-                {{ [ -f "$ACC/${{ACC}}_1.fastq.gz" ] || [ -f "$ACC/${{ACC}}_1.fastq" ]; }} && \
-                {{ [ -f "$ACC/${{ACC}}_2.fastq.gz" ] || [ -f "$ACC/${{ACC}}_2.fastq" ]; }}
-            else
-                {{ [ -f "${{ACC}}_1.fastq.gz" ] || [ -f "${{ACC}}_1.fastq" ]; }} && \
-                {{ [ -f "${{ACC}}_2.fastq.gz" ] || [ -f "${{ACC}}_2.fastq" ]; }}
+            local DIR="."
+            [ -d "$ACC" ] && DIR="$ACC"
+            local SIZE1 SIZE2
+            
+            # Both R1 and R2 must exist and be valid
+            if [ -f "$DIR/${{ACC}}_1.fastq.gz" ] && [ -f "$DIR/${{ACC}}_2.fastq.gz" ]; then
+                SIZE1=$(stat -c%s "$DIR/${{ACC}}_1.fastq.gz" 2>/dev/null || echo "0")
+                SIZE2=$(stat -c%s "$DIR/${{ACC}}_2.fastq.gz" 2>/dev/null || echo "0")
+                if [ "$SIZE1" -ge 1024 ] && [ "$SIZE2" -ge 1024 ] && \
+                gzip -t "$DIR/${{ACC}}_1.fastq.gz" 2>/dev/null && \
+                gzip -t "$DIR/${{ACC}}_2.fastq.gz" 2>/dev/null; then
+                    return 0
+                fi
             fi
+            
+            if [ -f "$DIR/${{ACC}}_1.fastq" ] && [ -f "$DIR/${{ACC}}_2.fastq" ]; then
+                SIZE1=$(stat -c%s "$DIR/${{ACC}}_1.fastq" 2>/dev/null || echo "0")
+                SIZE2=$(stat -c%s "$DIR/${{ACC}}_2.fastq" 2>/dev/null || echo "0")
+                if [ "$SIZE1" -ge 1024 ] && [ "$SIZE2" -ge 1024 ]; then
+                    return 0
+                fi
+            fi
+            
+            return 1
         }}
 
         
@@ -492,7 +549,7 @@ if not found:
         
         MAX_RETRIES=3
         RETRY_DELAY=60
-        USE_ASPERA=true  # Start with Aspera, switch to HTTP if it fails
+        USE_ARIA2=true  # Start with aria2c, switch to enaDataGet HTTP if it fails
         
         for ATTEMPT in $(seq 1 $MAX_RETRIES); do
             echo ""
@@ -503,38 +560,61 @@ if not found:
             # Clean slate for this attempt
             rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
             
-            # TRY ASPERA FIRST (if not already known to fail)
+            # TRY ARIA2C FAST DOWNLOAD (parallel HTTPS via ENA portal API)
             # -----------------------------------------------------------------
-            if [ "$USE_ASPERA" = "true" ]; then
-                echo "[GEP2] Trying Aspera (fast) download..."
-                
-                # NOTE: `|| ASPERA_EXIT=$?` keeps the command off set -e's kill list.
-                # Failure here is expected (fallback drives the retry loop).
-                ASPERA_EXIT=0
-                gep2_download_with_timeout 14400 enaDataGet.py -a -f fastq -d . {wildcards.acc} || ASPERA_EXIT=$?
-                
-                # Check if Aspera actually produced files (not just exit code!)
-                if check_paired_files {wildcards.acc}; then
-                    echo "[GEP2] Aspera download produced files"
+            if [ "$USE_ARIA2" = "true" ]; then
+                echo "[GEP2] Trying aria2c (parallel HTTPS) download..."
+
+                URLS=$(gep2_ena_get_urls {wildcards.acc} paired)
+                URLS_EXIT=$?
+
+                if [ "$URLS_EXIT" -eq 0 ] && [ -n "$URLS" ]; then
+                    URL1=$(echo "$URLS" | sed -n '1p')
+                    URL2=$(echo "$URLS" | sed -n '2p')
+                    echo "[GEP2]   R1: $URL1"
+                    echo "[GEP2]   R2: $URL2"
+
+                    # NOTE: `|| ARIA_EXIT=$?` keeps the command off set -e's kill list.
+                    # Failure here is expected (fallback drives the retry loop).
+                    # Two sequential aria2c invocations (16 conns each): simpler
+                    # error tracking than one multi-file call.
+                    ARIA_EXIT=0
+                    for url in "$URL1" "$URL2"; do
+                        gep2_download_with_timeout 14400 aria2c \
+                            -x 16 -s 16 -c \
+                            --max-tries=3 --retry-wait=10 \
+                            --allow-overwrite=true \
+                            --auto-file-renaming=false \
+                            --file-allocation=none \
+                            --console-log-level=warn --summary-interval=30 \
+                            -d . "$url" || ARIA_EXIT=$?
+                    done
+
+                    # Check if aria2c actually produced valid files (not just exit code!)
+                    if check_paired_files {wildcards.acc}; then
+                        echo "[GEP2] aria2c download produced files"
+                    else
+                        echo "[GEP2] aria2c failed or produced no valid files (exit $ARIA_EXIT)"
+                        echo "[GEP2] Falling back to enaDataGet HTTP..."
+                        USE_ARIA2=false
+                        rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
+                    fi
                 else
-                    echo "[GEP2] Aspera failed or produced no files (exit code: $ASPERA_EXIT)"
-                    echo "[GEP2] Falling back to HTTP..."
-                    USE_ASPERA=false
-                    
-                    # Clean up any partial Aspera artifacts
-                    rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
+                    echo "[GEP2] Could not get URLs from ENA portal API (exit $URLS_EXIT)"
+                    echo "[GEP2] Falling back to enaDataGet HTTP..."
+                    USE_ARIA2=false
                 fi
             fi
-            
-            # TRY HTTP (if Aspera failed or was skipped)
+
+            # TRY ENADATAGET HTTP (if aria2c failed or was skipped)
             # -----------------------------------------------------------------
-            if [ "$USE_ASPERA" = "false" ]; then
-                echo "[GEP2] Using HTTP download..."
-                
+            if [ "$USE_ARIA2" = "false" ]; then
+                echo "[GEP2] Using enaDataGet HTTP download..."
+
                 HTTP_EXIT=0
                 gep2_download_with_timeout 14400 enaDataGet.py -f fastq -d . {wildcards.acc} || HTTP_EXIT=$?
-                
-                echo "[GEP2] HTTP download finished (exit code: $HTTP_EXIT)"
+
+                echo "[GEP2] enaDataGet HTTP finished (exit code: $HTTP_EXIT)"
             fi
             
             # TRY SUBMITTED FORMAT (if fastq format produced nothing)
@@ -679,9 +759,11 @@ if not found:
 
 
 rule _00_download_reads_url:
-    """Download reads from direct URLs (only matches non-SRA filenames via url_filename constraint)"""
+    """Download reads from direct URLs (only matches non-SRA filenames)"""
     output:
-        reads = "{outdir}/downloaded_data/{species}/reads/{read_type}/{url_filename}"
+        reads = "{outdir}/downloaded_data/{species}/reads/{read_type}/{filename}"
+    wildcard_constraints:
+        filename=r"(?![SED]RR[0-9]+(_[12])?\.fastq(\.gz)?$).+\.(fastq|fq)(\.gz)?$"
     params:
         manifest = manifest_path
     threads: cpu_func("download_data")

@@ -1,5 +1,7 @@
 # -------------------------------------------------------------------------------
 # GEP2 - Report Generation Rules
+# by Diego De Panis, 2025
+# note: AI tools may have been used to improve, clean and/or comment this version of the code
 # -------------------------------------------------------------------------------
 
 # Note: The following are defined in the main Snakefile:
@@ -34,8 +36,11 @@ def get_report_compleasm_inputs(wildcards):
     """Get all compleasm tar.gz files for this assembly (if enabled).
     The tar.gz contains {lineage}_odb{version}/full_table.tsv which will
     be extracted at runtime for --compleasm-full."""
+    if _as_bool(config.get("PREFER_BUSCO", False)):
+        return []
     if not _as_bool(config.get("RUN_COMPL", True)):
         return []
+
     
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
     
@@ -50,6 +55,28 @@ def get_report_compleasm_inputs(wildcards):
             ))
     
     return compleasm_files
+
+
+def get_report_busco_inputs(wildcards):
+    """Get all BUSCO summary files for this assembly (if enabled)."""
+    if not _as_bool(config.get("PREFER_BUSCO", False)):
+        return []
+    if not _as_bool(config.get("RUN_COMPL", True)):
+        return []
+
+    asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
+    
+    busco_files = []
+    for asm_key, asm_path in sorted(asm_files.items()):
+        if asm_path and asm_path != "None":
+            asm_basename = get_assembly_basename(asm_path)
+            busco_files.append(os.path.join(
+                config["OUT_FOLDER"], "GEP2_results", wildcards.species,
+                wildcards.asm_id, "busco", asm_basename,
+                f"{asm_basename}_summary.txt"
+            ))
+    
+    return busco_files
 
 
 def get_report_merqury_inputs(wildcards):
@@ -304,7 +331,10 @@ def get_all_report_inputs(wildcards):
     
     # Compleasm if enabled
     inputs.extend(get_report_compleasm_inputs(wildcards))
-    
+
+    # BUSCO if enabled (NEW)
+    inputs.extend(get_report_busco_inputs(wildcards))
+
     # Merqury if enabled and has reads
     merqury = get_report_merqury_inputs(wildcards)
     inputs.extend(merqury['qv'])
@@ -351,6 +381,7 @@ rule Z00_generate_report:
         asm_id = lambda w: w.asm_id,
         gfastats = lambda w: get_report_gfastats_inputs(w),
         compleasm = lambda w: get_report_compleasm_inputs(w),
+        busco = lambda w: get_report_busco_inputs(w),
         merqury_qv = lambda w: get_report_merqury_inputs(w)['qv'],
         merqury_completeness = lambda w: get_report_merqury_inputs(w)['completeness'],
         genomescope_plot = lambda w: get_report_genomescope_input(w),
@@ -378,23 +409,35 @@ rule Z00_generate_report:
         
         cmd="python {params.script_path} -s {params.species} -a {params.asm_id} -g {params.gfastats}"
         
-        # Compleasm: extract full_table.tsv from tar.gz files
-        COMPLEASM_FULLS=""
+        BUSCO_SUMMARIES=""
         COMPLEASM_CLEANUP=""
-        for targz in {params.compleasm}; do
-            if [ -n "$targz" ]; then
-                extract_dir=$(dirname "$targz")
-                tar -xzf "$targz" -C "$extract_dir"
-                full_table=$(find "$extract_dir" -name "full_table.tsv" -path "*_odb*" | head -1)
-                if [ -n "$full_table" ]; then
-                    COMPLEASM_FULLS="$COMPLEASM_FULLS $full_table"
-                    COMPLEASM_CLEANUP="$COMPLEASM_CLEANUP $(dirname "$full_table")"
-                fi
+
+        for b_sum in {params.busco}; do
+            if [ -n "$b_sum" ] && [ -f "$b_sum" ]; then
+                BUSCO_SUMMARIES="$BUSCO_SUMMARIES $b_sum"
             fi
         done
-        
-        if [ -n "$COMPLEASM_FULLS" ]; then
-            cmd="$cmd --compleasm-full $COMPLEASM_FULLS"
+
+        if [ -n "$BUSCO_SUMMARIES" ]; then
+            cmd="$cmd --busco-summary $BUSCO_SUMMARIES"
+        else
+            # Compleasm: extract full_table.tsv from tar.gz files
+            COMPLEASM_FULLS=""
+            for targz in {params.compleasm}; do
+                if [ -n "$targz" ]; then
+                    extract_dir=$(dirname "$targz")
+                    tar -xzf "$targz" -C "$extract_dir"
+                    full_table=$(find "$extract_dir" -name "full_table.tsv" -path "*_odb*" | head -1)
+                    if [ -n "$full_table" ]; then
+                        COMPLEASM_FULLS="$COMPLEASM_FULLS $full_table"
+                        COMPLEASM_CLEANUP="$COMPLEASM_CLEANUP $(dirname "$full_table")"
+                    fi
+                fi
+            done
+            
+            if [ -n "$COMPLEASM_FULLS" ]; then
+                cmd="$cmd --compleasm-full $COMPLEASM_FULLS"
+            fi
         fi
         
         if [ -n "{params.merqury_qv}" ]; then
@@ -474,4 +517,42 @@ rule Z00_generate_report:
                 echo "[GEP2] Cleaned up extracted compleasm: $cleanup_dir"
             fi
         done
+
+        echo "[GEP2] Checking for images to build portable markdown package..."
+        
+        REPORT_DIR="$(dirname "{output.report}")"
+        cd "$REPORT_DIR"
+        
+        # Kind of crappy code here but works... grab ANY filepath ending in .png
+        IMG_PATHS=$(grep -oE '[a-zA-Z0-9./_-]+\.png' "$(basename "{output.report}")" || true)
+        
+        # Only create the package if IMG_PATHS is not empty
+        if [ -n "$IMG_PATHS" ]; then
+            echo "[GEP2] Images found! Creating portable package..."
+            echo "[GEP2] Detected paths:"
+            echo "$IMG_PATHS"  # This is mainly for debug, maybe should go soon...
+            
+            PORTABLE_NAME="{wildcards.asm_id}_portable_md"
+            mkdir -p "$PORTABLE_NAME"
+            
+            # Copy the markdown file
+            cp "$(basename "{output.report}")" "$PORTABLE_NAME/"
+            
+            # Copy the images while preserving dir structure
+            for img in $IMG_PATHS; do
+                if [ -f "$img" ]; then
+                    cp --parents "$img" "$PORTABLE_NAME/"
+                else
+                    echo "[GEP2] WARNING: Portable MD could not find image: $img" >&2
+                fi
+            done
+            
+            # Compress and clean up
+            tar -czvf "$PORTABLE_NAME.tar.gz" "$PORTABLE_NAME/"
+            rm -rf "$PORTABLE_NAME"
+            
+            echo "[GEP2] Successfully created $PORTABLE_NAME.tar.gz"
+        else
+            echo "[GEP2] No images found. Skipping portable markdown package creation."
+        fi
         """

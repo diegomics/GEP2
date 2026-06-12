@@ -1,0 +1,15 @@
+GEP2_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+GEP2_VAR=$(echo -n "docker://diegomics/gep2_base:0.4" | md5sum | awk '{print $1}')
+COMPL_VAR=$(echo -n "docker://quay.io/biocontainers/compleasm:0.2.7--pyh7e72e81_0" | md5sum | awk '{print $1}')
+BUSCO_VAR=$(echo -n "docker://ezlabgva/busco:v6.1.0_cv1" | md5sum | awk '{print $1}')
+INSP_VAR=$(echo -n "docker://diegomics/inspector:1.3.1" | md5sum | awk '{print $1}')
+HIC_VAR=$(echo -n "docker://diegomics/hic_analysis:0.2" | md5sum | awk '{print $1}')
+BLOB_VAR=$(echo -n "docker://genomehubs/blobtoolkit:4.5.1" | md5sum | awk '{print $1}')
+
+export GEP2_CONTAINER=${GEP2_DIR}/.snakemake/singularity/${GEP2_VAR}.simg
+export COMPLEASM_CONTAINER=${GEP2_DIR}/.snakemake/singularity/${COMPL_VAR}.simg
+export BUSCO_CONTAINER=${GEP2_DIR}/.snakemake/singularity/${BUSCO_VAR}.simg
+export INSPECTOR_CONTAINER=${GEP2_DIR}/.snakemake/singularity/${INSP_VAR}.simg
+export HIC_CONTAINER=${GEP2_DIR}/.snakemake/singularity/${HIC_VAR}.simg
+export BLOBTK_CONTAINER=${GEP2_DIR}/.snakemake/singularity/${BLOB_VAR}.simg
