@@ -556,10 +556,10 @@ rule C02_run_merqury:
 
         cd $TEMP_DIR
 
-        MERQURY_DIR=$(dirname $(which merqury.sh))
-        export PATH="$MERQURY_DIR:$PATH"
-        export MERQURY="$MERQURY_DIR"
+        MERQURY_BIN=$(dirname $(which merqury.sh))
+        export PATH="$MERQURY_BIN:$PATH"
 
+        export MERQURY=/opt/conda/share/merqury
 
         echo "[GEP2] Running Merqury for {wildcards.species}/{wildcards.asm_id}"
         echo "[GEP2] K-mer database: {input.kmer_db}"
