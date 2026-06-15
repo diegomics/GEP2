@@ -1924,11 +1924,6 @@ def get_kmer_stats_results():
             expected_files.append(
                 os.path.join(asm_kmer_dir, f"{asm_id}.hist")
             )
-
-            expected_files.extend([
-                os.path.join(asm_kmer_dir, f"{asm_id}.meryl"),
-                os.path.join(asm_kmer_dir, f"{asm_id}.hist")
-            ])
             
             # Assembly-specific GenomeScope2
             gs_dir = os.path.join(asm_kmer_dir, "genomescope2")
