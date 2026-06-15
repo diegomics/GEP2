@@ -110,7 +110,7 @@ def get_report_merqury_inputs(wildcards):
     
     merqury_dir = os.path.join(
         config["OUT_FOLDER"], "GEP2_results", wildcards.species, 
-        wildcards.asm_id, "merqury"
+        wildcards.asm_id, MERQURY_SUBDIR
     )
     
     return {
@@ -386,7 +386,7 @@ rule Z00_generate_report:
         merqury_completeness = lambda w: get_report_merqury_inputs(w)['completeness'],
         genomescope_plot = lambda w: get_report_genomescope_input(w),
         merqury_dir = lambda w: os.path.join(
-            config["OUT_FOLDER"], "GEP2_results", w.species, w.asm_id, "merqury"
+            config["OUT_FOLDER"], "GEP2_results", w.species, w.asm_id, MERQURY_SUBDIR
         ),
         inspector = lambda w: get_report_inspector_inputs(w),
         hic_snapshots = lambda w: get_report_hic_snapshots(w),

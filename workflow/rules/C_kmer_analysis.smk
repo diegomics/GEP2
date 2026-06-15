@@ -2,6 +2,13 @@
 # GEP2 - K-mer Analysis Rules
 # -------------------------------------------------------------------------------
 
+if USE_FASTK:
+    ruleorder: C00_merge_fastk_db > C00_merge_assembly_kmer_db
+    ruleorder: C02_run_merqury_fk > C02_run_merqury
+else:
+    ruleorder: C00_merge_assembly_kmer_db > C00_merge_fastk_db
+    ruleorder: C02_run_merqury > C02_run_merqury_fk
+
 # -------------------------------------------------------------------------------
 # INPUT FUNCTIONS
 # -------------------------------------------------------------------------------
@@ -97,7 +104,7 @@ def get_per_read_kmer_input(wildcards):
 
 
 def get_assembly_kmer_db_inputs(wildcards):
-    """Get the per-read k-mer DBs needed for an assembly."""
+    """Get the per-read k-mer DBs needed for an assembly (Meryl / FastK)."""
     # Check if k-mer analysis should be skipped for this assembly
     if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
         return []
@@ -109,18 +116,25 @@ def get_assembly_kmer_db_inputs(wildcards):
     kmer_len = get_kmer_length(priority_rt) if priority_rt else 31
     
     inputs = []
+
     for r in reads:
-        db_path = os.path.join(
-            config["OUT_FOLDER"], "GEP2_results", "data", wildcards.species,
-            "reads", r["read_type"], f"kmer_db_k{kmer_len}", f"{r['base']}.meryl"
-        )
+        if USE_FASTK:
+            db_path = os.path.join(
+                config["OUT_FOLDER"], "GEP2_results", "data", wildcards.species,
+                "reads", r["read_type"], f"fastk_k{kmer_len}", f"{r['base']}.ktab"
+            )
+        else:
+            db_path = os.path.join(
+                config["OUT_FOLDER"], "GEP2_results", "data", wildcards.species,
+                "reads", r["read_type"], f"kmer_db_k{kmer_len}", f"{r['base']}.meryl"
+            )
         inputs.append(db_path)
     
     return inputs
 
 
 def get_merqury_db_input(wildcards):
-    """Get the merged k-mer database path for this assembly."""
+    """Get the merged k-mer database path for this assembly (Meryl or FastK)."""
     # Check if k-mer analysis should be skipped for this assembly
     if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
         return []
@@ -129,10 +143,19 @@ def get_merqury_db_input(wildcards):
     if not read_type:
         raise ValueError(f"No reads available for {wildcards.species}")
     kmer_len = get_kmer_length(read_type)
-    return os.path.join(
-        config["OUT_FOLDER"], "GEP2_results", wildcards.species,
-        wildcards.asm_id, f"k{kmer_len}", f"{wildcards.asm_id}.meryl"
-    )
+
+    if USE_FASTK:
+        # Use FastK database for MerquryFK
+        return os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", wildcards.species,
+            wildcards.asm_id, f"k{kmer_len}", f"{wildcards.asm_id}.ktab"
+        )
+    else:
+        # Use Meryl database for Merqury
+        return os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", wildcards.species,
+            wildcards.asm_id, f"k{kmer_len}", f"{wildcards.asm_id}.meryl"
+        )
 
 def get_merqury_asm_inputs(wildcards):
     """Get assembly files for Merqury, in sorted order."""
@@ -148,7 +171,6 @@ def get_asm_count(wildcards):
     """Get number of assembly files for determining haploid/diploid mode."""
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
     return len([v for v in asm_files.values() if v and v != "None"])
-
 
 # -------------------------------------------------------------------------------
 # RULES - Per-Read K-mer Database Construction
@@ -202,6 +224,69 @@ rule C00_build_per_read_kmer_db:
         mv temp.meryl {output.meryl_db}
         
         echo "[GEP2] ✅ K-mer database complete: {output.meryl_db}"
+        """
+
+rule C00_build_per_read_fastk_db:
+    """Build FastK k-mer database for a single read file."""
+    input:
+        reads = get_per_read_kmer_input
+    output:
+        ktab = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "{read_type}", "fastk_k{kmer_len}", "{base}.ktab"
+        )
+    wildcard_constraints:
+        kmer_len = r"\d+",
+        base = r"[^/]+"
+    threads: cpu_func("kmer_count")
+    resources:
+        mem_mb = mem_func("kmer_count"),
+        runtime = time_func("kmer_count")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "{read_type}", "logs", "C00_fastk_k{kmer_len}_{base}.log"
+        )
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
+
+        echo "[GEP2] Building FastK database for {wildcards.base}"
+        echo "[GEP2] K-mer length: {wildcards.kmer_len}"
+
+        OUTDIR=$(dirname {output.ktab})
+        mkdir -p $OUTDIR
+
+        TEMP_DIR="$(mktemp -d "$GEP2_TMP/GEP2_fastk_{wildcards.species}_{wildcards.base}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+
+        # Handle compressed input
+        if [[ "{input.reads}" == *.gz ]]; then
+            echo "[GEP2] Decompressing input file..."
+            zcat "{input.reads}" > $TEMP_DIR/input.fastq
+            INPUT_FILE=$TEMP_DIR/input.fastq
+        else
+            INPUT_FILE="{input.reads}"
+        fi
+
+        echo "[GEP2] Running FastK..."
+        FastK \
+            -k{wildcards.kmer_len} \
+            -T{threads} \
+            -P$TEMP_DIR \
+            -N$TEMP_DIR/{wildcards.base} \
+            -t \
+            $INPUT_FILE
+
+        echo "[GEP2] FastK finished. Moving output..."
+        shopt -s dotglob
+        mv $TEMP_DIR/{wildcards.base}* $OUTDIR/ || true
+        mv $TEMP_DIR/.{wildcards.base}* $OUTDIR/ || true
+        shopt -u dotglob
+
+        echo "[GEP2] ✅ FastK database created: {output.ktab}"
         """
 
 
@@ -276,7 +361,84 @@ rule C00_merge_assembly_kmer_db:
         echo "[GEP2] Assembly k-mer database complete"
         """
 
+rule C00_merge_fastk_db:
+    """
+    Merge FastK k-mer tables for an assembly.
+    Produces merged .ktab and .hist (binary) files.
+    """
+    input:
+        roots = get_assembly_kmer_db_inputs
+    output:
+        ktab = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+            "k{kmer_len}", "{asm_id}.ktab"
+        ),
+        hist = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+            "k{kmer_len}", "{asm_id}.hist"
+        )
+    wildcard_constraints:
+        kmer_len = r"\d+"
+    threads: cpu_func("kmer_count")
+    resources:
+        mem_mb = mem_func("kmer_count"),
+        runtime = time_func("kmer_count")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+            "logs", "C00_fastk_merge_k{kmer_len}.log"
+        )
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
 
+        echo "[GEP2] Starting FastK merge"
+        echo "[GEP2] Input roots:"
+        echo {input.roots}
+
+        WORK_DIR="$(gep2_get_workdir 100)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_merge_kmer_{wildcards.species}_{wildcards.asm_id}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+        
+        cd "$TEMP_DIR"
+
+        echo "[GEP2] Working directory: $TEMP_DIR"
+
+        if [ $(echo {input.roots} | wc -w) -eq 1 ]; then
+            echo "[GEP2] Only one input, skipping merge - copying directly"
+
+            ROOT=$(echo {input.roots} | sed 's/\\.ktab$//')
+            BASE=$(basename "$ROOT")
+
+            Fastcp $ROOT $TEMP_DIR
+            Fastmv $TEMP_DIR/$BASE $TEMP_DIR/{wildcards.asm_id}
+        else
+            echo "[GEP2] More than one input, merging kmer-db's"
+
+            Fastmerge \
+                -t \
+                -h \
+                -T{threads} \
+                -P$TEMP_DIR \
+                {wildcards.asm_id} \
+                {input.roots}
+
+            echo "[GEP2] Working directory: $WORKDIR"
+            echo "[GEP2] Files after merge:"
+            ls -lah
+
+        fi
+
+        OUTDIR=$(dirname {output.ktab})
+        mkdir -p "$OUTDIR"
+
+        Fastmv $TEMP_DIR/{wildcards.asm_id} $OUTDIR/{wildcards.asm_id}
+
+        echo "[GEP2] Merge complete. Files in $OUTDIR:"
+        ls -lah "$OUTDIR"
+        """
 
 # -------------------------------------------------------------------------------
 # RULES - GenomeScope2
@@ -324,18 +486,22 @@ rule C01_run_genomescope2:
         """
         set -euo pipefail
         exec > {log} 2>&1
+
+        mkdir -p {params.outdir}
         
         echo "[GEP2] Running GenomeScope2 for {wildcards.species}/{wildcards.asm_id}"
         echo "[GEP2] K-mer length: {wildcards.kmer_len}"
         echo "[GEP2] Ploidy: {params.ploidy}"
         
-        mkdir -p {params.outdir}
-        
-        genomescope2 -i {input.hist} \\
-                     -o {params.outdir} \\
-                     -k {wildcards.kmer_len} \\
-                     -p {params.ploidy} \\
-                     -n {wildcards.asm_id}
+        CMD="genomescope2 \
+            --input {input.hist} \
+            --output {params.outdir} \
+            --kmer_len {wildcards.kmer_len} \
+            --ploidy {params.ploidy} \
+            --name_prefix {wildcards.asm_id}"
+    
+        echo "[GEP2] Command: $CMD"
+        eval $CMD
         
         echo "[GEP2] GenomeScope2 complete"
         """
@@ -348,7 +514,7 @@ rule C01_run_genomescope2:
 rule C02_run_merqury:
     """Run Merqury for assembly QV and completeness analysis."""
     input:
-        meryl_db = get_merqury_db_input,
+        kmer_db = get_merqury_db_input,
         assemblies = get_merqury_asm_inputs
     output:
         qv = os.path.join(
@@ -380,12 +546,7 @@ rule C02_run_merqury:
         set -euo pipefail
         exec > {log} 2>&1
         
-        echo "[GEP2] Running Merqury for {wildcards.species}/{wildcards.asm_id}"
-        echo "[GEP2] K-mer database: {input.meryl_db}"
-        echo "[GEP2] Assembly count: {params.asm_count}"
-        
         export OMP_NUM_THREADS={threads}
-        export MERQURY=/opt/conda/share/merqury 
         
         mkdir -p {params.outdir}
         
@@ -394,80 +555,163 @@ rule C02_run_merqury:
         trap 'rm -rf "$TEMP_DIR"' EXIT
 
         cd $TEMP_DIR
-        
+
+        echo "[GEP2] Running Merqury for {wildcards.species}/{wildcards.asm_id}"
+        echo "[GEP2] K-mer database: {input.kmer_db}"
+        echo "[GEP2] Assembly count: {params.asm_count}"
+
+        # Merqury needs the Meryl DB in the working directory
         ln -sf {input.meryl_db} read_db.meryl
         
         link_assembly() {{
             local src="$1"
             local linkname="$2"
             local ext=""
-            
             case "$src" in
-                *.fasta.gz) ext=".fasta.gz" ;;
-                *.fa.gz)    ext=".fasta.gz" ;;
-                *.fna.gz)   ext=".fasta.gz" ;;
-                *.fasta)    ext=".fasta" ;;
-                *.fa)       ext=".fasta" ;;
-                *.fna)      ext=".fasta" ;;
-                *)          ext=".fasta" ;;
+                *.fasta.gz|*.fa.gz|*.fna.gz) ext=".fasta.gz" ;;
+                *.fasta|*.fa|*.fna)          ext=".fasta"    ;;
+                *)                           ext=".fasta"    ;;
             esac
-            
             ln -sf "$src" "${{linkname}}${{ext}}"
             echo "${{linkname}}${{ext}}"
         }}
-        
+
         ASM_COUNT={params.asm_count}
         ASSEMBLIES="{input.assemblies}"
-        
+
         if [ $ASM_COUNT -eq 1 ]; then
-            echo "[GEP2] Running Merqury in HAPLOID mode"
-            
+            echo "[GEP2] Running in HAPLOID mode"
             ASM1=$(echo "$ASSEMBLIES" | awk '{{print $1}}')
             ASM1_LINK=$(link_assembly "$ASM1" "asm1")
-            
+
             merqury.sh read_db.meryl "$ASM1_LINK" {params.prefix}
-            
+
         elif [ $ASM_COUNT -eq 2 ]; then
-            echo "[GEP2] Running Merqury in DIPLOID mode"
-            
+            echo "[GEP2] Running in DIPLOID mode"
             ASM1=$(echo "$ASSEMBLIES" | awk '{{print $1}}')
             ASM2=$(echo "$ASSEMBLIES" | awk '{{print $2}}')
             ASM1_LINK=$(link_assembly "$ASM1" "asm1")
             ASM2_LINK=$(link_assembly "$ASM2" "asm2")
-            
+
             merqury.sh read_db.meryl "$ASM1_LINK" "$ASM2_LINK" {params.prefix}
-            
+
         else
             echo "[GEP2] ERROR: Expected 1 or 2 assembly files, got $ASM_COUNT"
             exit 1
         fi
-        
-        # DEBUG: List all files created
-        echo "[GEP2] Files created in temp directory:"
-        ls -la
-        echo ""
-        echo "[GEP2] Looking for completeness files:"
-        ls -la *completeness* 2>/dev/null || echo "No completeness files found"
-        echo ""
 
-        # Move results
+        # Move all outputs to the final directory
         mv {params.prefix}.* {params.outdir}/ 2>/dev/null || true
-        mv *.png {params.outdir}/ 2>/dev/null || true
-        mv *.pdf {params.outdir}/ 2>/dev/null || true
-        mv *.hist {params.outdir}/ 2>/dev/null || true
-        mv *.wig {params.outdir}/ 2>/dev/null || true
-        mv *.bed {params.outdir}/ 2>/dev/null || true
-        mv asm*.meryl {params.outdir}/ 2>/dev/null || true
+        mv *.png *.pdf *.hist *.wig *.bed {params.outdir}/ 2>/dev/null || true
         mv completeness.stats {params.outdir}/{params.prefix}.completeness.stats 2>/dev/null || true
-        
-        echo "[GEP2] Files in output directory after move:"
-        ls -la {params.outdir}/
-        
+
         if [ ! -f {output.qv} ]; then
             echo "[GEP2] ERROR: QV file not created"
             exit 1
         fi
-        
+
+        echo "[GEP2] Merqury completed"
+        echo "=== QV Summary ==="
+        cat {output.qv}
+        echo "=== Completeness Summary ==="
+        cat {output.completeness}
+        """
+
+rule C02_run_merqury_fk:
+    """Run MerquryFK (for FastK) for assembly QV and completeness analysis."""
+    input:
+        kmer_db = get_merqury_db_input,
+        assemblies = get_merqury_asm_inputs
+    output:
+        qv = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+            "merqury_fk", "{asm_id}.qv"
+        ),
+        completeness = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+            "merqury_fk", "{asm_id}.completeness.stats"
+        )
+    params:
+        outdir = lambda w: os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", w.species, w.asm_id, "merqury_fk"
+        ),
+        asm_count = get_asm_count,
+        prefix = lambda w: w.asm_id
+    threads: cpu_func("merqury")
+    resources:
+        mem_mb = mem_func("merqury"),
+        runtime = time_func("merqury")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+            "logs", "C02_merqury_fk.log"
+        )
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
+
+        mkdir -p {params.outdir}
+
+        WORK_DIR="$(gep2_get_workdir 50)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_merqury_fk_{wildcards.species}_{wildcards.asm_id}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+
+        cd "$TEMP_DIR"
+
+        echo "[GEP2] Running MerquryFK for {wildcards.species}/{wildcards.asm_id}"
+        echo "[GEP2] K-mer database: {input.kmer_db}"
+        echo "[GEP2] Assembly count: {params.asm_count}"       
+
+
+        link_assembly() {{
+            local src="$1"
+            local linkname="$2"
+            local ext=""
+            case "$src" in
+                *.fasta.gz|*.fa.gz|*.fna.gz) ext=".fasta.gz" ;;
+                *.fasta|*.fa|*.fna)          ext=".fasta"    ;;
+                *)                           ext=".fasta"    ;;
+            esac
+            ln -sf "$src" "${{linkname}}${{ext}}"
+            echo "${{linkname}}${{ext}}"
+        }}
+
+        ASM_COUNT={params.asm_count}
+        ASSEMBLIES="{input.assemblies}"
+
+        if [ "$ASM_COUNT" -eq 1 ]; then
+            echo "[GEP2] Haploid mode"
+            ASM1=$(echo "$ASSEMBLIES" | awk '{{print $1}}')
+            ASM1_LINK=$(link_assembly "$ASM1" "asm1")
+
+            MerquryFK -T{threads} -P"$TEMP_DIR" {input.kmer_db} "$ASM1_LINK" {params.prefix}
+
+        elif [ "$ASM_COUNT" -eq 2 ]; then
+            echo "[GEP2] Diploid mode"
+            ASM1=$(echo "$ASSEMBLIES" | awk '{{print $1}}')
+            ASM2=$(echo "$ASSEMBLIES" | awk '{{print $2}}')
+            ASM1_LINK=$(link_assembly "$ASM1" "asm1")
+            ASM2_LINK=$(link_assembly "$ASM2" "asm2")
+
+            MerquryFK -T{threads} -P"$TEMP_DIR" {input.kmer_db} "$ASM1_LINK" "$ASM2_LINK" {params.prefix}
+
+        else
+            echo "[GEP2] ERROR: Expected 1 or 2 assembly files, got $ASM_COUNT"
+            exit 1
+        fi
+
+        # Move all outputs to the final directory
+        mv {params.prefix}.* {params.outdir}/ 2>/dev/null || true
+        mv *.png *.pdf *.hist *.wig *.bed {params.outdir}/ 2>/dev/null || true
+        mv completeness.stats {params.outdir}/{params.prefix}.completeness.stats 2>/dev/null || true
+
+        if [ ! -f {output.qv} ]; then
+            echo "[GEP2] ERROR: QV file not created"
+            exit 1
+        fi
+
         echo "[GEP2] Merqury completed"
         echo "=== QV Summary ==="
         cat {output.qv}
