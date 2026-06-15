@@ -556,12 +556,17 @@ rule C02_run_merqury:
 
         cd $TEMP_DIR
 
+        MERQURY_DIR=$(dirname $(which merqury.sh))
+        export PATH="$MERQURY_DIR:$PATH"
+        export MERQURY="$MERQURY_DIR"
+
+
         echo "[GEP2] Running Merqury for {wildcards.species}/{wildcards.asm_id}"
         echo "[GEP2] K-mer database: {input.kmer_db}"
         echo "[GEP2] Assembly count: {params.asm_count}"
 
         # Merqury needs the Meryl DB in the working directory
-        ln -sf {input.meryl_db} read_db.meryl
+        ln -sf {input.kmer_db} $TEMP_DIR/read_db.meryl
         
         link_assembly() {{
             local src="$1"
@@ -572,8 +577,8 @@ rule C02_run_merqury:
                 *.fasta|*.fa|*.fna)          ext=".fasta"    ;;
                 *)                           ext=".fasta"    ;;
             esac
-            ln -sf "$src" "${{linkname}}${{ext}}"
-            echo "${{linkname}}${{ext}}"
+            ln -sf "$src" "$TEMP_DIR/${{linkname}}${{ext}}"
+            echo "$TEMP_DIR/${{linkname}}${{ext}}"
         }}
 
         ASM_COUNT={params.asm_count}
@@ -584,7 +589,7 @@ rule C02_run_merqury:
             ASM1=$(echo "$ASSEMBLIES" | awk '{{print $1}}')
             ASM1_LINK=$(link_assembly "$ASM1" "asm1")
 
-            merqury.sh read_db.meryl "$ASM1_LINK" {params.prefix}
+            merqury.sh $TEMP_DIR/read_db.meryl "$ASM1_LINK" {params.prefix}
 
         elif [ $ASM_COUNT -eq 2 ]; then
             echo "[GEP2] Running in DIPLOID mode"
@@ -593,7 +598,7 @@ rule C02_run_merqury:
             ASM1_LINK=$(link_assembly "$ASM1" "asm1")
             ASM2_LINK=$(link_assembly "$ASM2" "asm2")
 
-            merqury.sh read_db.meryl "$ASM1_LINK" "$ASM2_LINK" {params.prefix}
+            merqury.sh $TEMP_DIR/read_db.meryl "$ASM1_LINK" "$ASM2_LINK" {params.prefix}
 
         else
             echo "[GEP2] ERROR: Expected 1 or 2 assembly files, got $ASM_COUNT"
@@ -674,8 +679,8 @@ rule C02_run_merqury_fk:
                 *.fasta|*.fa|*.fna)          ext=".fasta"    ;;
                 *)                           ext=".fasta"    ;;
             esac
-            ln -sf "$src" "${{linkname}}${{ext}}"
-            echo "${{linkname}}${{ext}}"
+            ln -sf "$src" "$TEMP_DIR/${{linkname}}${{ext}}"
+            echo "$TEMP_DIR/${{linkname}}${{ext}}"
         }}
 
         ASM_COUNT={params.asm_count}
