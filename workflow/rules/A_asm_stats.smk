@@ -210,7 +210,7 @@ rule A02_busco:
         ),
         archive = os.path.join(
             out_folder, "{species}", "{assembly}",
-            "busco",    , "{asm_basename}_results.tar.gz"
+            "busco", "{asm_basename}_results.tar.gz"
         )
     params:
         outdir       = lambda w: os.path.join(
