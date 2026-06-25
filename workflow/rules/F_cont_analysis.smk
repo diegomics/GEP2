@@ -943,7 +943,7 @@ rule F05_map_reads_for_blob:
         [ "$MAP_THREADS" -lt 2 ] && MAP_THREADS=2
         [ "$SORT_THREADS" -lt 2 ] && SORT_THREADS=2
 
-        echo "[GEP2] Thread split: minimap2=$MAP_THREADS, samtools=$VIEW_THREADS, sambamba=$SORT_THREADS"
+        echo "[GEP2] Thread split: minimap2=$MAP_THREADS, samtools-view=$VIEW_THREADS, samtools-sort=$SORT_THREADS"
 
         # Determine read inputs based on read type
         READ_TYPE="{params.read_type}"
@@ -964,10 +964,10 @@ rule F05_map_reads_for_blob:
                 {input.asm} \
                 ${{ALL_READS[@]}} \
             | samtools view -bu -@ $VIEW_THREADS \
-            | sambamba sort \
-                -t $SORT_THREADS \
-                -m $(( {resources.mem_mb} * 60 / 100 ))M \
-                --tmpdir="$TEMP_DIR" \
+            | samtools sort \
+                -@ $SORT_THREADS \
+                -m $(( {resources.mem_mb} * 60 / 100 / SORT_THREADS ))M \
+                -T "$TEMP_DIR" \
                 -o {output.bam} \
                 /dev/stdin
 
@@ -985,10 +985,10 @@ rule F05_map_reads_for_blob:
                     {input.asm} \
                     "${{ALL_READS[0]}}" "${{ALL_READS[1]}}" \
                 | samtools view -bu -@ $VIEW_THREADS \
-                | sambamba sort \
-                    -t $SORT_THREADS \
-                    -m $(( {resources.mem_mb} * 60 / 100 ))M \
-                    --tmpdir="$TEMP_DIR" \
+                | samtools sort \
+                    -@ $SORT_THREADS \
+                    -m $(( {resources.mem_mb} * 60 / 100 / SORT_THREADS ))M \
+                    -T "$TEMP_DIR" \
                     -o {output.bam} \
                     /dev/stdin
 
@@ -1009,10 +1009,10 @@ rule F05_map_reads_for_blob:
                         {input.asm} \
                         "${{ALL_READS[$i]}}" "${{ALL_READS[$((i+1))]}}" \
                     | samtools view -bu -@ $VIEW_THREADS \
-                    | sambamba sort \
-                        -t $SORT_THREADS \
-                        -m $(( {resources.mem_mb} * 60 / 100 ))M \
-                        --tmpdir="$TEMP_DIR" \
+                    | samtools sort \
+                        -@ $SORT_THREADS \
+                        -m $(( {resources.mem_mb} * 60 / 100 / SORT_THREADS ))M \
+                        -T "$TEMP_DIR" \
                         -o "$PARTIAL_BAM" \
                         /dev/stdin
 
