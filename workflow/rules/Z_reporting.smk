@@ -135,11 +135,9 @@ def get_report_genomescope_input(wildcards):
         return []
     
     kmer_len = get_kmer_length(read_type)
-    
-    return [os.path.join(
-        config["OUT_FOLDER"], "GEP2_results", wildcards.species,
-        wildcards.asm_id, f"k{kmer_len}", "genomescope2", f"{wildcards.asm_id}_linear_plot.png"
-    )]
+
+    gs_dir = kmer_asm_genomescope_dir(wildcards.species, wildcards.asm_id, kmer_len)
+    return [os.path.join(gs_dir, f"{wildcards.asm_id}_linear_plot.png")]
 
 
 def get_report_inspector_inputs(wildcards):
@@ -524,7 +522,7 @@ rule Z00_generate_report:
         cd "$REPORT_DIR"
         
         # Kind of crappy code here but works... grab ANY filepath ending in .png
-        IMG_PATHS=$(grep -oE '[a-zA-Z0-9./_-]+\.png' "$(basename "{output.report}")" || true)
+        IMG_PATHS=$(grep -oE '[a-zA-Z0-9./_-]+\\.png' "$(basename "{output.report}")" || true)
         
         # Only create the package if IMG_PATHS is not empty
         if [ -n "$IMG_PATHS" ]; then
