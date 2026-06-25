@@ -1,7 +1,7 @@
 # GEP2 - Genome Evaluation Pipeline 2
 # by Diego De Panis, 2025
 # note: AI tools may have been used to improve, clean and/or comment this version of the code
-GEP2_VER = "0.4"
+GEP2_VER = "0.5"
 
 # Debug verbosity (set to True for detailed DAG building messages)
 VERBOSE = False
@@ -313,10 +313,7 @@ missing = [k for k in required_keys if k not in config]
 if missing:
     raise ValueError(f"Missing required config keys: {missing}")
 
-
-# ----- FASTK-SWITCH: -----
-KMER_STATS = _as_bool(config.get("KMER_STATS", True))
-USE_FASTK = _as_bool(config.get("USE_FASTK", False))
+USE_FASTK = _as_bool(config.get("PREFER_FASTK", False))
 MERQURY_SUBDIR = "merqury_fk" if USE_FASTK else "merqury"
 
 # Set up output folder
@@ -1844,6 +1841,37 @@ def get_read_processing_results():
 # COLLECTORS - K-mer Analysis
 # -------------------------------------------------------------------------------
 
+def _kmer_root():
+    return os.path.join(config["OUT_FOLDER"], "GEP2_results")
+
+def kmer_per_read_db(species, read_type, kmer_len, base):
+    """Per-read DB path: Meryl directory or FastK .ktab (disjoint folders)."""
+    d = os.path.join(_kmer_root(), "data", species, "reads", read_type)
+    if USE_FASTK:
+        return os.path.join(d, f"fastk_k{kmer_len}", f"{base}.ktab")
+    return os.path.join(d, f"kmer_db_k{kmer_len}", f"{base}.meryl")
+
+def kmer_asm_subdir(kmer_len):
+    return f"k{kmer_len}_fastk" if USE_FASTK else f"k{kmer_len}"
+
+def kmer_asm_db(species, asm_id, kmer_len):
+    """Merged assembly read-set DB: Meryl directory or FastK .ktab."""
+    d = os.path.join(_kmer_root(), species, asm_id, kmer_asm_subdir(kmer_len))
+    return os.path.join(d, f"{asm_id}.ktab" if USE_FASTK else f"{asm_id}.meryl")
+
+def kmer_asm_hist(species, asm_id, kmer_len):
+    """ASCII histogram fed to GenomeScope2 (text in both modes)."""
+    d = os.path.join(_kmer_root(), species, asm_id, kmer_asm_subdir(kmer_len))
+    return os.path.join(d, f"{asm_id}.genomescope.hist" if USE_FASTK else f"{asm_id}.hist")
+
+def kmer_asm_genomescope_dir(species, asm_id, kmer_len):
+    return os.path.join(_kmer_root(), species, asm_id,
+                        kmer_asm_subdir(kmer_len), "genomescope2")
+
+def reads_only_genomescope_dir(species, read_type, kmer_len):
+    return os.path.join(_kmer_root(), "data", species, "reads",
+                        read_type, kmer_asm_subdir(kmer_len), "genomescope2")
+
 def get_kmer_stats_results():
     """Get expected k-mer analysis outputs (per-read DBs and assembly-specific merged DBs)."""
     expected_files = []
@@ -1856,7 +1884,6 @@ def get_kmer_stats_results():
 
     # Get allowed read types from DATA_PRIORITY
     priority_order = _parse_tech_priority()  # e.g., ["illumina", "hifi", "ont"...]
-    merge_tech = _as_bool(config.get("MERGE_TECH", False))
     
     # Track which per-read k-mer DBs we need (deduplicated)
     per_read_dbs = {}  # (species, read_type, base) -> kmer_len
@@ -1892,7 +1919,6 @@ def get_kmer_stats_results():
                 continue
 
             kmer_len = get_kmer_length(read_type)
-            read_type_lower = read_type.lower()
             
             # Collect per-read DBs needed for this assembly
             # Only include reads from allowed technologies
@@ -1906,70 +1932,41 @@ def get_kmer_stats_results():
                 key = (species, r["read_type"], r["base"])
                 if key not in per_read_dbs:
                     per_read_dbs[key] = kmer_len
+
+            # Assembly-specific k-mer DB and histogram (Meryl or FastK)
+            expected_files.extend([
+                kmer_asm_db(species, asm_id, kmer_len),
+                kmer_asm_hist(species, asm_id, kmer_len),
+            ])
             
-            # Assembly-level paths
-            asm_kmer_dir = os.path.join(
-                config["OUT_FOLDER"], "GEP2_results", species, asm_id, f"k{kmer_len}"
-            )
-            
-            # K-mer database: .meryl for Meryl, .ktab for FastK; .hist always created
-            if USE_FASTK:
-                expected_files.append(
-                    os.path.join(asm_kmer_dir, f"{asm_id}.ktab")
-                )
-            else:
-                expected_files.append(
-                    os.path.join(asm_kmer_dir, f"{asm_id}.meryl")
-                )
-            expected_files.append(
-                os.path.join(asm_kmer_dir, f"{asm_id}.hist")
-            )
-            
-            # Assembly-specific GenomeScope2
-            gs_dir = os.path.join(asm_kmer_dir, "genomescope2")
-            
+            # GenomeScope2
+            gs_dir = kmer_asm_genomescope_dir(species, asm_id, kmer_len)
             expected_files.extend([
                 os.path.join(gs_dir, f"{asm_id}_summary.txt"),
                 os.path.join(gs_dir, f"{asm_id}_model.txt"),
                 os.path.join(gs_dir, f"{asm_id}_linear_plot.png"),
             ])
-            
             if IS_MAIN:
-                tool_string = "FastK" if USE_FASTK else "Meryl"
-                _debug_print(f"[GEP2] K-mer analysis for {species}/{asm_id}: using {read_type} reads (k={kmer_len})")
+                tool = "FastK" if USE_FASTK else "Meryl"
+                _debug_print(f"[GEP2] K-mer ({tool}) for {species}/{asm_id}: {read_type} reads (k={kmer_len})")
             
-            # Merqury outputs
+            # Merqury / MerquryFK outputs
             asm_count = len([v for v in asm_files.values() if v and v != "None"])
             mode = "diploid" if asm_count == 2 else "haploid"
             
-            merqury_dir = os.path.join(
-                config["OUT_FOLDER"], "GEP2_results", species, asm_id, MERQURY_SUBDIR
-            )
-            
+            merqury_dir = os.path.join(_kmer_root(), species, asm_id, MERQURY_SUBDIR)
             expected_files.extend([
                 os.path.join(merqury_dir, f"{asm_id}.qv"),
-                os.path.join(merqury_dir, f"{asm_id}.completeness.stats")
+                os.path.join(merqury_dir, f"{asm_id}.completeness.stats"),
             ])
             
             if IS_MAIN:
-                merqury_string = "MerquryFK" if USE_FASTK else "Merqury"
-                _debug_print(f"[GEP2] {merqury_string} for {species}/{asm_id}: {mode} mode ({asm_count} asm files)")
+                mtool = "MerquryFK" if USE_FASTK else "Merqury"
+                _debug_print(f"[GEP2] {mtool} for {species}/{asm_id}: {mode} mode ({asm_count} asm files)")
     
-    # Add per-read k-mer DB outputs (deduplicated)
+    # Add per-read k-mer DB outputs
     for (species, read_type, base), kmer_len in per_read_dbs.items():
-
-        if USE_FASTK:
-            db_path = os.path.join(
-                config["OUT_FOLDER"], "GEP2_results", "data", species,
-                "reads", read_type, f"fastk_k{kmer_len}", f"{base}.ktab"
-            )
-        else:
-            db_path = os.path.join(
-                config["OUT_FOLDER"], "GEP2_results", "data", species,
-                "reads", read_type, f"kmer_db_k{kmer_len}", f"{base}.meryl"
-            )
-
-        expected_files.append(db_path)
+        expected_files.append(kmer_per_read_db(species, read_type, kmer_len, base))
     
     return expected_files
 
@@ -2092,12 +2089,9 @@ def get_reads_only_profiling_results():
             kmer_len = get_kmer_length(selected_read_type)
             
             # Add outputs
-            base_dir = os.path.join(
-                config["OUT_FOLDER"], "GEP2_results", "data", species,
-                "reads", selected_read_type, f"k{kmer_len}"
-            )
-            
-            results.append(os.path.join(base_dir, "genomescope2", f"{species}_linear_plot.png"))
+            gs_dir = reads_only_genomescope_dir(species, selected_read_type, kmer_len)
+
+            results.append(os.path.join(gs_dir, f"{species}_linear_plot.png"))
     
     return results
 
@@ -2451,4 +2445,3 @@ include: "rules/Z_reporting.smk"
 rule all:
     input:
         get_all_expected_outputs()
-
