@@ -26,7 +26,7 @@ import requests
 from urllib.parse import quote
 from pathlib import Path
 
-__version__ = '0.1.7'
+__version__ = '0.1.8'
 
 # This is a crap and isn't working yet, will work on it soon...
 def convert_md_to_pdf(md_file, pdf_file=None):
@@ -404,117 +404,162 @@ def parse_busco_summary(filepath):
     return metrics
 
 
+def detect_kmer_tool(qv_file, completeness_file):
+    """Return the QV/completeness table label by peeking at the file header.
+    MerquryFK writes a header row starting with 'Assembly'; Merqury has none.
+    Defaults to 'MERQ' (Merqury) when neither file is readable."""
+    for path in (qv_file, completeness_file):
+        if not path:
+            continue
+        try:
+            with open(path) as f:
+                for line in f:
+                    if line.strip():
+                        first = line.split("\t", 1)[0].strip().lower()
+                        return "MERQ.FK" if first == "assembly" else "MERQ"
+        except OSError:
+            continue
+    return "MERQ"
+
+
 def parse_merqury_qv(filepath, num_assemblies):
-    """
-    Parse Merqury QV file.
-    Format: name\tErrors\tBases\tQV\tErrorRate
-    Returns list of QV values for each assembly.
+    """Parse a Merqury or MerquryFK .qv summary file.
+
+    Merqury (no header):   <asm>  <asm-only>  <total>  <QV>  <error rate>   -> QV at col 3
+    MerquryFK (header):    Assembly  No Support  Total  Error %  QV         -> QV by name
+    Returns QV per assembly, in order; ignores the trailing 'both' row.
     """
     qv_values = []
-    
+
     try:
-        with open(filepath, 'r') as f:
-            lines = f.readlines()
-        
-        for i in range(min(num_assemblies, len(lines))):
-            parts = lines[i].strip().split('\t')
-            if len(parts) >= 4:
-                qv_values.append(float(parts[3]))
-            else:
-                qv_values.append(None)
-        
+        with open(filepath) as f:
+            rows = [ln.rstrip("\n").split("\t") for ln in f if ln.strip()]
+        if not rows:
+            return [None] * num_assemblies
+
+        qv_idx, start = 3, 0
+        if rows[0] and rows[0][0].strip().lower() == "assembly":   # MerquryFK header
+            start = 1
+            qv_idx = next((i for i, c in enumerate(rows[0])
+                           if c.strip().upper() == "QV"), len(rows[0]) - 1)
+
+        for parts in rows[start:]:
+            if len(qv_values) >= num_assemblies:
+                break
+            label = parts[0].strip().lower() if parts else ""
+            if label == "both" or "+" in label:      # skip combined row
+                continue
+
+            if len(parts) > qv_idx:
+                try:
+                    qv_values.append(float(parts[qv_idx]))
+                    continue
+
+                except ValueError:
+                    pass
+
         # Pad with None if fewer lines than expected
         while len(qv_values) < num_assemblies:
             qv_values.append(None)
-            
+
     except Exception as e:
-        print(f"Warning: Could not parse Merqury QV file: {e}")
+        print(f"Warning: Could not parse QV file: {e}")
         qv_values = [None] * num_assemblies
-    
+
     return qv_values
 
 
 def parse_merqury_completeness(filepath, num_assemblies):
-    """
-    Parse Merqury completeness file.
-    Format: name\tall\tFound\tTotal\tCompleteness
-    Returns list of completeness values for each assembly.
+    """Parse a Merqury or MerquryFK completeness file.
+
+    Merqury (no header):   <asm>  all  <found>  <total>  <completeness %>   -> last col
+    MerquryFK (header):    Assembly  Region  Found  Total  % Covered        -> by name
+    Both put the percentage last; ignores the trailing combined row.
     """
     completeness_values = []
-    
+
     try:
-        with open(filepath, 'r') as f:
-            lines = f.readlines()
-        
-        for i in range(min(num_assemblies, len(lines))):
-            parts = lines[i].strip().split('\t')
-            if len(parts) >= 5:
-                completeness_values.append(float(parts[4]))
-            else:
-                completeness_values.append(None)
-        
+        with open(filepath) as f:
+            rows = [ln.rstrip("\n").split("\t") for ln in f if ln.strip()]
+        if not rows:
+            return [None] * num_assemblies
+
+        pct_idx, start = 4, 0
+        if rows[0] and rows[0][0].strip().lower() == "assembly":   # MerquryFK header
+            start = 1
+            pct_idx = next((i for i, c in enumerate(rows[0])
+                            if c.strip().lower() in ("% covered", "completeness")),
+                           len(rows[0]) - 1)
+
+        for parts in rows[start:]:
+            if len(completeness_values) >= num_assemblies:
+                break
+            label = parts[0].strip().lower() if parts else ""
+            if label == "both" or "+" in label:      # skip asm1+asm2 row
+                continue
+            if len(parts) > pct_idx:
+                try:
+                    completeness_values.append(float(parts[pct_idx]))
+                    continue
+                except ValueError:
+                    pass
+
         while len(completeness_values) < num_assemblies:
             completeness_values.append(None)
-            
+
     except Exception as e:
-        print(f"Warning: Could not parse Merqury completeness file: {e}")
+        print(f"Warning: Could not parse completeness file: {e}")
         completeness_values = [None] * num_assemblies
-    
+
     return completeness_values
 
 
 def find_merqury_plots(merqury_dir, asm_id):
-    """
-    Find Merqury plot files in the output directory.
-    
-    Haploid (1 asm) produces:
-      - {prefix}.spectra-cn.fl.png
-      - {prefix}.spectra-asm.fl.png
-    
-    Diploid (2 asm) produces:
-      - {prefix}.{asm1_name}.spectra-cn.fl.png
-      - {prefix}.{asm2_name}.spectra-cn.fl.png
-      - {prefix}.spectra-asm.fl.png
-      - {prefix}.spectra-cn.fl.png (combined)
-    """
+    """Find Merqury/MerquryFK spectra plots. Both use spectra-cn/spectra-asm with
+    .fl/.ln/.st suffixes; prefer filled (.fl), fall back to line/stack."""
     plots = {
         'spectra_cn': [],
         'spectra_asm': None,
         'spectra_cn_combined': None
     }
-    
+
     if not merqury_dir or not os.path.isdir(merqury_dir):
         return plots
+
+    def _first_glob(*patterns):
+        for pat in patterns:
+            hits = sorted(glob.glob(os.path.join(merqury_dir, pat)))
+            if hits:
+                return hits
+        return []
     
     # Find ALL spectra-cn plots
-    cn_pattern = os.path.join(merqury_dir, "*.spectra-cn.fl.png")
-    cn_files = sorted(glob.glob(cn_pattern))
-    
+    cn_files = _first_glob("*.spectra-cn.fl.png", "*.spectra-cn.ln.png", "*.spectra-cn.st.png")
+
     for cn_file in cn_files:
         basename = os.path.basename(cn_file)
-        
+
         # Use Regex instead of dot counting.
         # This correctly handles prefixes with dots (e.g., gfArmOsto1.1)
-        # It looks for .asmX. or .hapX. or _asmX_ tags.
+        # It looks for .asmX. or .hapX. or _asmX_ tags.   
         if re.search(r'[\._](asm|hap)\d+[\._]', basename):
             # It has a tag -> Per-assembly plot
             plots['spectra_cn'].append(cn_file)
         else:
             # No tag -> Combined plot
             plots['spectra_cn_combined'] = cn_file
-    
+
     # For haploid, the only spectra-cn is the "combined" one, move it to spectra_cn list
     # (Because in haploid mode, the 'combined' plot IS the assembly plot)
     if not plots['spectra_cn'] and plots['spectra_cn_combined']:
         plots['spectra_cn'].append(plots['spectra_cn_combined'])
         plots['spectra_cn_combined'] = None
-    
+
     # Find spectra-asm plot
-    asm_pattern = os.path.join(merqury_dir, "*.spectra-asm.fl.png")
-    asm_files = glob.glob(asm_pattern)
+    asm_files = _first_glob("*.spectra-asm.fl.png", "*.spectra-asm.ln.png", "*.spectra-asm.st.png")
     if asm_files:
         plots['spectra_asm'] = asm_files[0]
-    
+
     return plots
 
 
@@ -673,11 +718,12 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, bu
                    haploid_number, haploid_source, taxon_id, family,
                    genomescope_plot, 
                    merqury_plots, hic_plots, blob_plots, fcs_gx_files,
-                   inspector_values, output_file):
+                   inspector_values, output_file, kmer_tool="MERQ"):
     """Generate the markdown report supporting 1 or 2 assemblies."""
     
     num_assemblies = len(gfastats_list)
     is_diploid = num_assemblies == 2
+    tool_display = "MerquryFK" if kmer_tool == "MERQ.FK" else "Merqury"
     
     # Build table data: list of tuples (metric, [(value1, rating1), (value2, rating2), ...])
     table_data = []
@@ -837,11 +883,11 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, bu
     
     if merqury_qv_values and any(v is not None for v in merqury_qv_values):
         ratings = [get_rating(v, 'merqury_qv') for v in merqury_qv_values]
-        add_metric("MERQ QV", merqury_qv_values, ratings)
+        add_metric(f"{kmer_tool} QV", merqury_qv_values, ratings)
     
     if merqury_completeness_values and any(v is not None for v in merqury_completeness_values):
         ratings = [get_rating(v, 'merqury_completeness') for v in merqury_completeness_values]
-        add_metric("MERQ Compl.", merqury_completeness_values, ratings)
+        add_metric(f"{kmer_tool} Compl.", merqury_completeness_values, ratings)
     
     # ---- Inspector metrics ----
     
@@ -969,7 +1015,7 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, bu
             report_lines.extend([
                 "",
                 "---",
-                "### Merqury Plots",
+                f"### {tool_display} Plots",
             ])
             
             # Spectra-asm plot (combined assembly spectra)
@@ -1245,6 +1291,9 @@ Examples:
         
         # Find Merqury plots
         merqury_plots = find_merqury_plots(args.merqury_dir, args.assembly)
+
+        # Identify the k-mer QV tool from the file header (Merqury vs MerquryFK)
+        kmer_tool = detect_kmer_tool(args.merqury_qv, args.merqury_completeness)
         
         # Parse Inspector files (if provided)
         inspector_values = [None] * num_assemblies
@@ -1276,7 +1325,8 @@ Examples:
             args.blob,
             args.fcs_gx,
             inspector_values,
-            args.output
+            args.output,
+            kmer_tool=kmer_tool
         )
         
         # Convert to PDF if requested
