@@ -124,6 +124,26 @@ You can also inspect:
 snakemake --profile execution/local --rerun-incomplete —dry-run
 ```
 - If Snakemake was suddenly killed, it might leave a hidden lock on your working directory to prevent other processes from overwriting files, and will tell you the directory is locked. You need to unlock it first before proceed with the run command: `snakemake --unlock`
+- Some HPC systems do not allow users to keep processes running on the login node, even if those processes consume virtually no resources. This is the case for our Snakemake workflow in Slurm mode, which only submits jobs to the queue. In such cases, the pipeline can be executed from a Slurm job script, for example:
+```bash
+#!/bin/bash
+
+#SBATCH -J game_controller
+### Add your Slurm parameters here (partition, std out, etc.)
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4G
+#SBATCH --time=5-00:00:00
+
+conda activate GAME_env
+
+# Prevent common issues with Slurm environment variables
+for var in $(env | grep -i "^SLURM_" | cut -d= -f1); do
+    unset "$var"
+done
+
+cd GAME
+snakemake --profile execution/slurm
+```
 
 ---
 
