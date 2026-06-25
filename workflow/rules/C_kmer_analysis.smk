@@ -97,33 +97,25 @@ def get_per_read_kmer_input(wildcards):
 
 
 def get_assembly_kmer_db_inputs(wildcards):
-    """Get the per-read k-mer DBs needed for an assembly."""
-    # Check if k-mer analysis should be skipped for this assembly
+    """Per-read k-mer DBs needed for an assembly (Meryl or FastK)."""
     if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
         return []
-    
     reads = _get_reads_for_assembly(wildcards.species, wildcards.asm_id)
-    
-    # Determine k-mer length (use priority read type for k-mer length decision)
     priority_rt = get_priority_read_type_for_assembly(wildcards.species, wildcards.asm_id)
     kmer_len = get_kmer_length(priority_rt) if priority_rt else 31
-    
-    inputs = []
-    for r in reads:
-        db_path = os.path.join(
-            config["OUT_FOLDER"], "GEP2_results", "data", wildcards.species,
-            "reads", r["read_type"], f"kmer_db_k{kmer_len}", f"{r['base']}.meryl"
-        )
-        inputs.append(db_path)
-    
-    return inputs
+    return [kmer_per_read_db(wildcards.species, r["read_type"], kmer_len, r["base"])
+            for r in reads]
 
 
 def get_merqury_db_input(wildcards):
-    """Get the merged k-mer database path for this assembly."""
-    # Check if k-mer analysis should be skipped for this assembly
+    """Merged k-mer DB for this assembly (Meryl .meryl dir or FastK .ktab)."""
     if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
         return []
+    read_type = get_priority_read_type(wildcards.species)
+    if not read_type:
+        raise ValueError(f"No reads available for {wildcards.species}")
+    kmer_len = get_kmer_length(read_type)
+    return kmer_asm_db(wildcards.species, wildcards.asm_id, kmer_len)
     
     read_type = get_priority_read_type(wildcards.species)
     if not read_type:
@@ -201,7 +193,51 @@ rule C00_build_per_read_kmer_db:
         
         mv temp.meryl {output.meryl_db}
         
-        echo "[GEP2] ✅ K-mer database complete: {output.meryl_db}"
+        echo "[GEP2] K-mer database complete: {output.meryl_db}"
+        """
+
+
+rule C00_build_per_read_fastk_db:
+    """Build a FastK k-mer database for a single read file."""
+    input:
+        reads = get_per_read_kmer_input
+    output:
+        ktab = os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+                            "reads", "{read_type}", "fastk_k{kmer_len}", "{base}.ktab")
+    wildcard_constraints:
+        kmer_len = r"\d+",
+        base = r"[^/]+"
+    threads: cpu_func("kmer_count")
+    resources:
+        mem_mb = mem_func("kmer_count"),
+        runtime = time_func("kmer_count")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+                     "reads", "{read_type}", "logs", "C00_fastk_k{kmer_len}_{base}.log")
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
+        echo "[GEP2] Building FastK DB for {wildcards.base} (k={wildcards.kmer_len})"
+
+        OUTDIR=$(dirname {output.ktab})
+        mkdir -p "$OUTDIR"
+        WORK_DIR="$(gep2_get_workdir 100)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_fastk_{wildcards.species}_{wildcards.base}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+
+        MEM_GB=$(( {resources.mem_mb} / 1024 )); [ "$MEM_GB" -lt 1 ] && MEM_GB=1
+
+        # FastK reads fastq/fasta and .gz natively - no manual decompression.
+        FastK -v -k{wildcards.kmer_len} -t1 \\
+              -T{threads} -M"$MEM_GB" -P"$TEMP_DIR" \\
+              -N"$TEMP_DIR/{wildcards.base}" \\
+              {input.reads}
+
+        # Move the whole DB (.ktab + hidden parts + .hist) atomically.
+        Fastmv "$TEMP_DIR/{wildcards.base}" "$OUTDIR/{wildcards.base}"
+        echo "[GEP2] FastK DB created: {output.ktab}"
         """
 
 
@@ -277,6 +313,55 @@ rule C00_merge_assembly_kmer_db:
         """
 
 
+rule C00_merge_fastk_db:
+    """Merge per-read FastK tables for an assembly (+ ASCII histogram for GenomeScope2)."""
+    input:
+        roots = get_assembly_kmer_db_inputs
+    output:
+        ktab = os.path.join(config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+                            "k{kmer_len}_fastk", "{asm_id}.ktab"),
+        hist = os.path.join(config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+                            "k{kmer_len}_fastk", "{asm_id}.genomescope.hist")
+    wildcard_constraints:
+        kmer_len = r"\d+"
+    params:
+        db_count = lambda w, input: len(input.roots)
+    threads: cpu_func("kmer_count")
+    resources:
+        mem_mb = mem_func("kmer_count"),
+        runtime = time_func("kmer_count")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+                     "logs", "C00_fastk_merge_k{kmer_len}.log")
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
+        echo "[GEP2] Merging FastK tables for {wildcards.asm_id} ({params.db_count} DB(s))"
+
+        WORK_DIR="$(gep2_get_workdir 100)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_fastk_merge_{wildcards.species}_{wildcards.asm_id}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+        cd "$TEMP_DIR"
+
+        if [ {params.db_count} -eq 1 ]; then
+            ROOT=$(echo "{input.roots}" | sed 's/\\.ktab$//')
+            Fastcp "$ROOT" "$TEMP_DIR/{wildcards.asm_id}"
+        else
+            Fastmerge -t -h -T{threads} -P"$TEMP_DIR" {wildcards.asm_id} {input.roots}
+        fi
+
+        # Convert the (binary) FastK histogram to GeneScope.FK ASCII for GenomeScope2.
+        Histex -G "{wildcards.asm_id}" > "{wildcards.asm_id}.genomescope.hist"
+
+        OUTDIR=$(dirname {output.ktab})
+        mkdir -p "$OUTDIR"
+        Fastmv "$TEMP_DIR/{wildcards.asm_id}" "$OUTDIR/{wildcards.asm_id}"
+        cp "$TEMP_DIR/{wildcards.asm_id}.genomescope.hist" {output.hist}
+        echo "[GEP2] FastK assembly DB complete: {output.ktab}"
+        """
+
 
 # -------------------------------------------------------------------------------
 # RULES - GenomeScope2
@@ -337,6 +422,47 @@ rule C01_run_genomescope2:
                      -p {params.ploidy} \\
                      -n {wildcards.asm_id}
         
+        echo "[GEP2] GenomeScope2 complete"
+        """
+
+
+rule C01_run_genomescope2_fastk:
+    """GenomeScope2 on the FastK-derived assembly histogram."""
+    input:
+        hist = os.path.join(config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+                            "k{kmer_len}_fastk", "{asm_id}.genomescope.hist")
+    output:
+        summary = os.path.join(config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+                               "k{kmer_len}_fastk", "genomescope2", "{asm_id}_summary.txt"),
+        model = os.path.join(config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+                             "k{kmer_len}_fastk", "genomescope2", "{asm_id}_model.txt"),
+        linear_plot = os.path.join(config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+                                   "k{kmer_len}_fastk", "genomescope2", "{asm_id}_linear_plot.png")
+    wildcard_constraints:
+        kmer_len = r"\d+"
+    params:
+        outdir = lambda w: os.path.join(config["OUT_FOLDER"], "GEP2_results", w.species, w.asm_id,
+                                        f"k{w.kmer_len}_fastk", "genomescope2"),
+        ploidy = config.get("PLOIDY", 2)
+    threads: cpu_func("genomescope")
+    resources:
+        mem_mb = mem_func("genomescope"),
+        runtime = time_func("genomescope")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+                     "logs", "C01_genomescope2_fastk_k{kmer_len}.log")
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
+        mkdir -p {params.outdir}
+        echo "[GEP2] GenomeScope2 (FastK) for {wildcards.species}/{wildcards.asm_id}"
+        genomescope2 -i {input.hist} \\
+                     -o {params.outdir} \\
+                     -k {wildcards.kmer_len} \\
+                     -p {params.ploidy} \\
+                     -n {wildcards.asm_id}
         echo "[GEP2] GenomeScope2 complete"
         """
 
@@ -475,53 +601,122 @@ rule C02_run_merqury:
         cat {output.completeness}
         """
 
+
+rule C02_run_merqury_fk:
+    """MerquryFK for assembly QV and completeness (FastK path)."""
+    input:
+        kmer_db = get_merqury_db_input,
+        assemblies = get_merqury_asm_inputs
+    output:
+        qv = os.path.join(config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+                          "merqury_fk", "{asm_id}.qv"),
+        completeness = os.path.join(config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+                                    "merqury_fk", "{asm_id}.completeness.stats")
+    params:
+        outdir = lambda w: os.path.join(config["OUT_FOLDER"], "GEP2_results", w.species, w.asm_id, "merqury_fk"),
+        asm_count = get_asm_count,
+        prefix = lambda w: w.asm_id
+    threads: cpu_func("merqury")
+    resources:
+        mem_mb = mem_func("merqury"),
+        runtime = time_func("merqury")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+                     "logs", "C02_merqury_fk.log")
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
+        mkdir -p {params.outdir}
+
+        WORK_DIR="$(gep2_get_workdir 50)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_merqury_fk_{wildcards.species}_{wildcards.asm_id}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+        cd "$TEMP_DIR"
+
+        echo "[GEP2] MerquryFK for {wildcards.species}/{wildcards.asm_id} ({params.asm_count} asm)"
+        echo "[GEP2] Read DB: {input.kmer_db}"
+
+        link_assembly() {{
+            local src="$1"; local linkname="$2"; local ext=""
+            case "$src" in
+                *.fasta.gz|*.fa.gz|*.fna.gz) ext=".fasta.gz" ;;
+                *.fasta|*.fa|*.fna)          ext=".fasta"    ;;
+                *)                           ext=".fasta"    ;;
+            esac
+            ln -sf "$src" "$TEMP_DIR/${{linkname}}${{ext}}"
+            echo "$TEMP_DIR/${{linkname}}${{ext}}"
+        }}
+
+        ASM_COUNT={params.asm_count}
+        ASSEMBLIES="{input.assemblies}"
+
+        if [ "$ASM_COUNT" -eq 1 ]; then
+            ASM1=$(echo "$ASSEMBLIES" | awk '{{print $1}}')
+            A1=$(link_assembly "$ASM1" "asm1")
+            MerquryFK -T{threads} -P"$TEMP_DIR" {input.kmer_db} "$A1" {params.prefix}
+        elif [ "$ASM_COUNT" -eq 2 ]; then
+            ASM1=$(echo "$ASSEMBLIES" | awk '{{print $1}}')
+            ASM2=$(echo "$ASSEMBLIES" | awk '{{print $2}}')
+            A1=$(link_assembly "$ASM1" "asm1")
+            A2=$(link_assembly "$ASM2" "asm2")
+            MerquryFK -T{threads} -P"$TEMP_DIR" {input.kmer_db} "$A1" "$A2" {params.prefix}
+        else
+            echo "[GEP2] ERROR: expected 1 or 2 assembly files, got $ASM_COUNT"; exit 1
+        fi
+
+        mv {params.prefix}.* {params.outdir}/ 2>/dev/null || true
+        mv ./*.png ./*.pdf {params.outdir}/ 2>/dev/null || true
+        [ -f completeness.stats ] && mv completeness.stats {params.outdir}/{params.prefix}.completeness.stats || true
+
+        if [ ! -f {output.qv} ] || [ ! -f {output.completeness} ]; then
+            echo "[GEP2] ERROR: expected MerquryFK outputs missing. Produced:"; ls -la; exit 1
+        fi
+        echo "[GEP2] MerquryFK done"
+        echo "=== QV ==="
+        cat {output.qv}
+        echo "=== Completeness ==="
+        cat {output.completeness}
+        """
+
+
 # -------------------------------------------------------------------------------
 # RULES - Reads-Only Genome Profiling
 # -------------------------------------------------------------------------------
 
 def get_reads_only_kmer_db_inputs(wildcards):
-    """Get per-read k-mer DBs for reads-only genome profiling."""
-    kmer_len = wildcards.kmer_len
-    read_type = wildcards.read_type
-    species = wildcards.species
-    
+    """Per-read k-mer DBs for reads-only profiling (Meryl or FastK)."""
+    kmer_len, read_type, species = wildcards.kmer_len, wildcards.read_type, wildcards.species
+
     inputs = []
     
     try:
         for asm_id, asm_data in samples_config["sp_name"][species]["asm_id"].items():
             if not _is_reads_only_entry(species, asm_id):
                 continue
-            
-            read_type_dict = asm_data.get("read_type", {})
-            
-            for rt_key, rt_data in read_type_dict.items():
+
+            for rt_key, rt_data in asm_data.get("read_type", {}).items():
                 if normalize_read_type(rt_key) != read_type:
                     continue
-                
-                read_files = rt_data.get("read_files", {})
-                
-                for path_key, path_value in sorted(read_files.items()):
+
+                for _, path_value in sorted(rt_data.get("read_files", {}).items()):
                     if not path_value or path_value == "None":
                         continue
-                    
-                    # Extract base name
+
                     basename = os.path.basename(str(path_value))
                     base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', basename, flags=re.IGNORECASE)
                     base = base.replace(".fq.gz", "").replace(".fastq.gz", "")
                     base = base.replace("_1", "").replace("_2", "")
                     base = base.replace("_filtered", "").replace("_corrected", "").replace("_trimmed", "")
-                    
-                    db_path = os.path.join(
-                        config["OUT_FOLDER"], "GEP2_results", "data", species,
-                        "reads", read_type, f"kmer_db_k{kmer_len}", f"{base}.meryl"
-                    )
-                    
+                    db_path = kmer_per_read_db(species, read_type, kmer_len, base)
+
                     if db_path not in inputs:
                         inputs.append(db_path)
-                        
+
     except (KeyError, TypeError, AttributeError):
         pass
-    
+
     return inputs
 
 
@@ -599,6 +794,55 @@ rule C10_merge_reads_only_kmer_db:
         """
 
 
+rule C10_merge_reads_only_fastk_db:
+    """Merge per-read FastK tables for reads-only profiling (+ ASCII histogram)."""
+    input:
+        roots = get_reads_only_kmer_db_inputs
+    output:
+        ktab = os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+                            "reads", "{read_type}", "k{kmer_len}_fastk", "{species}.ktab"),
+        hist = os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+                            "reads", "{read_type}", "k{kmer_len}_fastk", "{species}.genomescope.hist")
+    wildcard_constraints:
+        kmer_len = r"\d+"
+    params:
+        db_count = lambda w, input: len(input.roots)
+    threads: cpu_func("kmer_count")
+    resources:
+        mem_mb = mem_func("kmer_count"),
+        runtime = time_func("kmer_count")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+                     "reads", "{read_type}", "logs", "C10_fastk_merge_reads_only_k{kmer_len}.log")
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
+        echo "[GEP2] Merging reads-only FastK tables for {wildcards.species} ({params.db_count} DB(s))"
+
+        WORK_DIR="$(gep2_get_workdir 100)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_fastk_ro_{wildcards.species}_{wildcards.read_type}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+        cd "$TEMP_DIR"
+
+        if [ {params.db_count} -eq 1 ]; then
+            ROOT=$(echo "{input.roots}" | sed 's/\\.ktab$//')
+            Fastcp "$ROOT" "$TEMP_DIR/{wildcards.species}"
+        else
+            Fastmerge -t -h -T{threads} -P"$TEMP_DIR" {wildcards.species} {input.roots}
+        fi
+
+        Histex -G "{wildcards.species}" > "{wildcards.species}.genomescope.hist"
+
+        OUTDIR=$(dirname {output.ktab})
+        mkdir -p "$OUTDIR"
+        Fastmv "$TEMP_DIR/{wildcards.species}" "$OUTDIR/{wildcards.species}"
+        cp "$TEMP_DIR/{wildcards.species}.genomescope.hist" {output.hist}
+        echo "[GEP2] Reads-only FastK DB complete"
+        """
+
+
 rule C11_reads_only_genomescope2:
     """Run GenomeScope2 for reads-only genome profiling."""
     input:
@@ -656,5 +900,46 @@ rule C11_reads_only_genomescope2:
                      -p {params.ploidy} \
                      -n {wildcards.species}
         
+        echo "[GEP2] GenomeScope2 complete"
+        """
+
+
+rule C11_reads_only_genomescope2_fastk:
+    """GenomeScope2 on the FastK reads-only histogram."""
+    input:
+        hist = os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+                            "reads", "{read_type}", "k{kmer_len}_fastk", "{species}.genomescope.hist")
+    output:
+        summary = os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+                               "reads", "{read_type}", "k{kmer_len}_fastk", "genomescope2", "{species}_summary.txt"),
+        model = os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+                             "reads", "{read_type}", "k{kmer_len}_fastk", "genomescope2", "{species}_model.txt"),
+        linear_plot = os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+                                   "reads", "{read_type}", "k{kmer_len}_fastk", "genomescope2", "{species}_linear_plot.png")
+    wildcard_constraints:
+        kmer_len = r"\d+"
+    params:
+        outdir = lambda w: os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", w.species,
+                                        "reads", w.read_type, f"k{w.kmer_len}_fastk", "genomescope2"),
+        ploidy = config.get("PLOIDY", 2)
+    threads: cpu_func("genomescope")
+    resources:
+        mem_mb = mem_func("genomescope"),
+        runtime = time_func("genomescope")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+                     "reads", "{read_type}", "logs", "C11_reads_only_genomescope2_fastk_k{kmer_len}.log")
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
+        mkdir -p {params.outdir}
+        echo "[GEP2] GenomeScope2 (FastK, reads-only) for {wildcards.species}"
+        genomescope2 -i {input.hist} \\
+                     -o {params.outdir} \\
+                     -k {wildcards.kmer_len} \\
+                     -p {params.ploidy} \\
+                     -n {wildcards.species}
         echo "[GEP2] GenomeScope2 complete"
         """

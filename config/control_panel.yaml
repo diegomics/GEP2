@@ -94,7 +94,7 @@ MERGE_TECH: off
 PLOIDY: 2
 
 # Use FastK instead of Meryl
-#USE_FASTK: off # under development
+PREFER_FASTK: off
 
 
 # Long reads-based analysis -----------------------------------------------------------------------
