@@ -7,9 +7,9 @@
 
 # Generates a markdown report aggregating results from:
 # - gfastats (assembly metrics)
-# - compleasm (gene completeness)
+# - compleasm/busco (gene completeness)
 # - busco (gene completeness)
-# - Merqury (k-mer QV and completeness)
+# - Merqury/MerquryFK (k-mer QV and completeness)
 # - GenomeScope2 (genome profiling)
 # - Inspector (structural errors)
 # - Blobtools (contamination screening)
@@ -26,7 +26,7 @@ import requests
 from urllib.parse import quote
 from pathlib import Path
 
-__version__ = '0.1.8'
+__version__ = '0.1.9'
 
 # This is a crap and isn't working yet, will work on it soon...
 def convert_md_to_pdf(md_file, pdf_file=None):
@@ -124,31 +124,45 @@ def convert_md_to_pdf(md_file, pdf_file=None):
 def get_species_genomic_data_from_goat(species):
     """Get taxon ID, family/order lineage, haploid number and source from GoaT API based on species name.
 
-    Returns a dict with keys: taxon_id, family, haploid_number, haploid_source, error.
+    Looks up the species name on GoaT. If the species is not present, falls back to the genus.
+
+    Returns a dict with keys: taxon_id, family, haploid_number, haploid_source, resolution_level, error.
     'family' holds the family-rank name when available, otherwise the order-rank name
     (or None if neither is present).
+    'resolution_level' is 'species' or 'genus', indicating which name matched.
     """
     result = {
         'taxon_id': None,
         'family': None,
         'haploid_number': None,
         'haploid_source': None,
+        'resolution_level': None,
         'error': None
     }
 
     try:
-        species_encoded = quote(species)
-        search_url = f'https://goat.genomehubs.org/api/v2/search?query=tax_name%28{species_encoded}%29&result=taxon'
-        response = requests.get(search_url, timeout=30)
-        response.raise_for_status()
+        # Try the species name; if GoaT has no match, fall back to the genus.
+        parts = species.split()
+        candidates = [(species, 'species')]
+        if len(parts) >= 2:
+            candidates.append((parts[0], 'genus'))
 
-        search_data = response.json()
+        first_result = None
+        for name, level in candidates:
+            name_encoded = quote(name)
+            search_url = f'https://goat.genomehubs.org/api/v2/search?query=tax_name%28{name_encoded}%29&result=taxon'
+            response = requests.get(search_url, timeout=30)
+            response.raise_for_status()
+            search_data = response.json()
+            if search_data.get('results'):
+                first_result = search_data['results'][0]['result']
+                result['resolution_level'] = level
+                break
 
-        if not search_data.get('results'):
+        if first_result is None:
             result['error'] = "Species not found"
             return result
 
-        first_result = search_data['results'][0]['result']
         taxon_id = first_result['taxon_id']
         result['taxon_id'] = taxon_id
 
@@ -167,7 +181,6 @@ def get_species_genomic_data_from_goat(species):
         record_url = f'https://goat.genomehubs.org/api/v2/record?recordId={taxon_id}&result=taxon&taxonomy=ncbi'
         record_response = requests.get(record_url, timeout=30)
         record_response.raise_for_status()
-
         record_data = record_response.json()
 
         if not record_data.get('records'):
@@ -715,7 +728,7 @@ def parse_inspector(filepath):
 
 def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, busco_list, 
                    merqury_qv_values, merqury_completeness_values,
-                   haploid_number, haploid_source, taxon_id, family,
+                   haploid_number, haploid_source, taxon_id, family, resolution_level,
                    genomescope_plot, 
                    merqury_plots, hic_plots, blob_plots, fcs_gx_files,
                    inspector_values, output_file, kmer_tool="MERQ"):
@@ -940,15 +953,21 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, bu
         if c.get('other_lineage'):
             other_lineage = c['other_lineage']
             break
-    
+
     # Prepare haploid number information
     if haploid_number is not None:
-        haploid_info = f"‡ = Haploid number is {haploid_number} ({haploid_source}, [GoaT](https://goat.genomehubs.org))<br>"
+        if resolution_level == 'genus':
+            haploid_info = f"‡ = Haploid number is {haploid_number} (genus-level estimate, {haploid_source}, [GoaT](https://goat.genomehubs.org))<br>"
+        else:
+            haploid_info = f"‡ = Haploid number is {haploid_number} ({haploid_source}, [GoaT](https://goat.genomehubs.org))<br>"
     else:
         haploid_info = "‡ = Haploid number not found on [GoaT](https://goat.genomehubs.org)<br>"
-    
+
     # Prepare header info
-    taxon_id_str = str(taxon_id) if taxon_id is not None else "not found"
+    if resolution_level == 'genus':
+        taxon_id_str = f"{taxon_id}, genus-level" if taxon_id is not None else "not found"
+    else:
+        taxon_id_str = str(taxon_id) if taxon_id is not None else "not found"
     family_str = family if family is not None else "not found"
     
     # Build the complete report
@@ -1232,6 +1251,7 @@ Examples:
         haploid_source = goat_data['haploid_source']
         taxon_id = goat_data['taxon_id']
         family = goat_data['family']
+        resolution_level = goat_data['resolution_level']
         
         if goat_data['error']:
             print(f"Warning: Could not retrieve all GoaT data: {goat_data['error']}")
@@ -1319,6 +1339,7 @@ Examples:
             haploid_source, 
             taxon_id,
             family,
+            resolution_level,
             args.genomescope_plot,
             merqury_plots,
             args.hic,
