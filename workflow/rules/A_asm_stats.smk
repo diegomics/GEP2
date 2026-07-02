@@ -169,11 +169,13 @@ rule A02_compleasm:
         cd "$TMPOUT"
         
         # Create archive of everything except summary.txt
-        tar -czf results.tar.gz --exclude='summary.txt' .
+        # outside the directory being archived to avoid error
+        ARCHIVE_TMP="$TEMP_DIR/results.tar.gz"
+        tar -czf "$ARCHIVE_TMP" --exclude='summary.txt' .
         
         # Verify archive
-        gzip -t results.tar.gz
-        tar -tzf results.tar.gz >/dev/null
+        gzip -t "$ARCHIVE_TMP"
+        tar -tzf "$ARCHIVE_TMP" >/dev/null
         
         # Handle summary.txt
         if [ ! -f "summary.txt" ]; then
@@ -192,7 +194,7 @@ rule A02_compleasm:
         echo "[GEP2] Copying results to {params.outdir}"
         mkdir -p "{params.outdir}"
         cp summary.txt "{output.summary}"
-        cp results.tar.gz "{output.archive}"
+        cp "$ARCHIVE_TMP" "{output.archive}"
         
         echo "[GEP2] compleasm completed successfully"
         """
@@ -236,7 +238,7 @@ rule A02_busco:
     shell:
         r'''
         set -euo pipefail
-        mkdir -p "$(dirname {log})" "{params.outdir}"
+        mkdir -p "$(dirname {log})"
         exec > "{log}" 2>&1
 
         echo "[GEP2] Running BUSCO on {input.asm}"
@@ -283,18 +285,34 @@ rule A02_busco:
 
         RUN_DIR="$TEMP_DIR/{wildcards.asm_basename}"
 
+        echo "[GEP2] Packaging outputs"
+        cd "$RUN_DIR"
+
+        # Create archive of everything except the short summary
+        # outside the directory being archived to avoid error
+        ARCHIVE_TMP="$TEMP_DIR/results.tar.gz"
+        tar -czf "$ARCHIVE_TMP" --exclude='short_summary.*.txt' .
+
+        # Verify archive
+        gzip -t "$ARCHIVE_TMP"
+        tar -tzf "$ARCHIVE_TMP" >/dev/null
+
+        # Stage the summary in temp; the real outputs are written only after all
+        # checks below pass, so a failed job never leaves partial files behind.
+        SUMMARY_TMP="$TEMP_DIR/summary.txt"
         SUMMARY_FILE="$(find "$RUN_DIR" -maxdepth 1 -name 'short_summary.*.txt' | head -1)"
         if [ -n "$SUMMARY_FILE" ]; then
-            cp "$SUMMARY_FILE" "{output.summary}"
+            cp "$SUMMARY_FILE" "$SUMMARY_TMP"
         else
             echo "[GEP2] WARNING: no BUSCO short_summary found" >&2
-            touch "{output.summary}"
+            touch "$SUMMARY_TMP"
         fi
 
-        cd "$RUN_DIR"
-        tar -czf "{output.archive}" --exclude='short_summary.*.txt' .
-        gzip -t "{output.archive}"
-        tar -tzf "{output.archive}" >/dev/null
+        # Copy results to final location
+        echo "[GEP2] Copying results to {params.outdir}"
+        mkdir -p "{params.outdir}"
+        cp "$SUMMARY_TMP" "{output.summary}"
+        cp "$ARCHIVE_TMP" "{output.archive}"
 
         echo "[GEP2] BUSCO completed successfully"
         '''

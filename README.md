@@ -77,6 +77,7 @@ config/control_panel.yaml
 ### 5) Configure Cluster or Computer Parameters
 
 Depending on which mode you will run, configure the respective parameters in the config file. **Important:** Don't forget to bind the folders in the _apptainer-args_ field.
+
 ```
 GEP2/execution/
 ├── local/
@@ -94,11 +95,13 @@ GEP2/execution/
 Load the conda environment like `conda activate GEP2_env` and in the GEP2 folder run:
 
 #### On HPC/Server/Cluster using [Slurm](https://slurm.schedmd.com/):
+
 ```bash
 nohup snakemake --profile execution/slurm &
 ```
 
 #### On Local Computer:
+
 ```bash
 nohup snakemake --profile execution/local &
 ```
@@ -120,11 +123,14 @@ You can also inspect:
 
 #### Common Troubleshooting:
 - If your process was killed or stopped abruptly, Snakemake might complain about incomplete files when you try to run it again. We can tell Snakemake to identify and rerun those incomplete parts (and always a good idea to try a dry-run first, -n):
+
 ```bash
 snakemake --profile execution/local --rerun-incomplete -n
 ```
+
 - If Snakemake was suddenly killed, it might leave a hidden lock on your working directory to prevent other processes from overwriting files, and will tell you the directory is locked. You need to unlock it first before proceed with the run command: `snakemake --unlock`
 - Some HPC systems do not allow users to keep processes running on the login node, even if those processes consume virtually no resources. This is the case for our Snakemake workflow in Slurm mode, which only submits jobs to the queue. In such cases, the pipeline can be executed from a Slurm job script, for example:
+
 ```bash
 #!/bin/bash
 
@@ -149,7 +155,7 @@ snakemake --profile execution/slurm
 
 ## Results Structure
 
-Open the report with a markdown renderer (VS Code works well):
+Open the report with a markdown renderer, like [VS Code](https://code.visualstudio.com) or [MarkText](https://marktext.me) (also notice `{asm_id}_portable_md.tar.gz`, which contains the md file and all the plots to easily share the report!):
 
 ```
 GEP2_results/{sp_name}/{asm_id}/{asm_id}_report.md
@@ -275,13 +281,15 @@ GEP2_results/
 
 ### Outside the pipeline, you can run all of these programs just using the containers!
 Once pulled, Snakemake saves the container images in a hidden folder using its md5 name. To get the images into variables and use them, run:
+
 ```
 source containers_vars
 ```
+
 >The names of the variables are: `GEP2_CONTAINER`, `COMPLEASM_CONTAINER`, `BUSCO_CONTAINER`, `INSPECTOR_CONTAINER`, `HIC_CONTAINER`, and `BLOBTK_CONTAINER`.
 
 Now, you can run a given program included in the container like:
+
 ```
 apptainer exec -B {path/to/data}:{path/to/data} $HIC_CONTAINER tidk -h
 ```
-
