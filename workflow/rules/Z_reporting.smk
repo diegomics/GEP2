@@ -500,6 +500,15 @@ def get_all_ear_inputs(wildcards):
 
     return inputs
 
+def get_all_markdown_files(wildcards):
+    """
+    Collect all {asm_id}_report.md-files produced by Z00_generate_report across the whole GEP2-run.
+    """
+    report_files = []
+    for species, species_data in samples_config.get("sp_name", {}).items():
+        for asm_id in species_data.get("asm_id", {}).keys():
+            report_files.append(os.path.join(config["OUT_FOLDER"], "GEP2_results", species, asm_id, f"{asm_id}_report.md"))
+    return report_files
 
 # -------------------------------------------------------------------------------
 # RULES
@@ -770,4 +779,41 @@ rule Z01_generate_ear_yaml:
 
         echo "[GEP2] Command: $cmd"
         $cmd
+        """
+
+rule Z02_generate_super_report:
+    """
+    Aggregate every {asm_id}_report.md of this GEP2-run into a single HTML super-report.
+    Report includes heatmap quality ratings based on EBP/VGP-Standards.
+    """
+    input:
+        reports = get_all_markdown_files
+    output:
+        super_report = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "super_report.html"
+        )
+    params:
+        script_path = str(SCRIPTS_DIR / "make_gep2_super_report.py")
+    container: CONTAINERS["gep2_base"]
+    threads: 1
+    resources:
+        mem_mb = 2000,
+        runtime = 15
+    log:
+        os.path.join(
+            config["OUT_FOLDER"] , "GEP2_results", "logs", "Z02_generate_super_report.log"
+        )
+    shell:
+        """
+        exec > {log} 2>&1
+
+        echo "[GEP2] Aggregating {input.reports} into super-report."
+
+        python {params.script_path} \
+            --reports {input.reports} \
+            --output {output.super_report}
+            --format html
+            --human-readable
+
+        echo "[GEP2] Super-report written to {output.super_report}"
         """
