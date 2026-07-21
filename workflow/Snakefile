@@ -1,7 +1,7 @@
 # GEP2 - Genome Evaluation Pipeline 2
 # by Diego De Panis, 2025
 # note: AI tools may have been used to improve, clean and/or comment this version of the code
-GEP2_VER = "0.5.1"
+GEP2_VER = "0.5.2"
 
 # Debug verbosity (set to True for detailed DAG building messages)
 VERBOSE = False
@@ -2354,6 +2354,42 @@ def get_report_results():
     return expected_files
 
 
+# COLLECTORS - EAR YAML Template
+# -------------------------------------------------------------------------------
+
+def get_ear_yaml_results():
+    """Get expected EAR YAML template outputs (one per assembly id), if EAR_YAML enabled."""
+    expected_files = []
+
+    if not _as_bool(config.get("EAR_YAML", False)):
+        return expected_files
+
+    if not samples_config or "sp_name" not in samples_config:
+        return expected_files
+
+    for species, species_data in samples_config["sp_name"].items():
+        if not species_data or "asm_id" not in species_data:
+            continue
+
+        for asm_id, asm_data in species_data["asm_id"].items():
+            if not asm_data:
+                continue
+
+            if _is_reads_only_entry(species, asm_id):
+                continue
+
+            asm_files = get_assembly_files(species, asm_id)
+            if not asm_files:
+                continue
+
+            expected_files.append(os.path.join(
+                config["OUT_FOLDER"], "GEP2_results", species, asm_id,
+                f"{asm_id}_EAR.yaml"
+            ))
+
+    return expected_files
+
+
 # -------------------------------------------------------------------------------
 # MAIN OUTPUT FUNCTION
 # -------------------------------------------------------------------------------
@@ -2420,7 +2456,15 @@ def get_all_expected_outputs():
 
     # Final reports (always runs, adapts to what's available)
     expected_files.extend(get_report_results())
-    
+
+    # EAR YAML template (if enabled)
+    ear_yaml = _as_bool(config.get("EAR_YAML", False))
+    if ear_yaml:
+        expected_files.extend(get_ear_yaml_results())
+    else:
+        if IS_MAIN:
+            print("[GEP2] EAR_YAML is off - skipping EAR template generation")
+
     return expected_files
 
 

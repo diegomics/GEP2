@@ -442,6 +442,10 @@ rule E01_chromap_map:
         pairs = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
             "hic", "{asm_basename}", "{asm_basename}.pairs.gz"
+        ),
+        stats_log = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+            "hic", "{asm_basename}", "{asm_basename}.chromap_stats.log"
         )
     params:
         outdir = lambda w: os.path.join(
@@ -484,7 +488,7 @@ rule E01_chromap_map:
         TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_chromap_{wildcards.species}_{wildcards.asm_basename}_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
         
-        # Map with chromap, output pairs format
+        # Map with chromap, output pairs format (also redirect the stderr/out for the report later)
         chromap --preset hic \
             -q {params.mapq} \
             -x {input.index} \
@@ -493,7 +497,10 @@ rule E01_chromap_map:
             -2 {params.r2_str} \
             -t {threads} \
             --pairs \
-            -o "$TEMP_DIR/{wildcards.asm_basename}.pairs"
+            -o "$TEMP_DIR/{wildcards.asm_basename}.pairs" \
+            2>&1 | tee "$TEMP_DIR/{wildcards.asm_basename}.chromap_stats.log"
+
+        cp "$TEMP_DIR/{wildcards.asm_basename}.chromap_stats.log" {output.stats_log}
         
         echo "[GEP2] Compressing pairs file..."
         bgzip -@ {threads} -c "$TEMP_DIR/{wildcards.asm_basename}.pairs" > {output.pairs}
@@ -1047,9 +1054,8 @@ rule E12_telo_track:
                 awk 'BEGIN{{OFS="\\t"}}
                      NR>1 && NF>=4 {{
                          chrom=$1
-                         window=$2
-                         start=(window-1)*1000
-                         end=window*1000
+                         end=$2
+                         start=end-1000
                          total=int($3)+int($4)
                          printf "%s\\t%d\\t%d\\t%d\\n", chrom, start, end, total
                      }}' "$RAW_TSV" > {output.bedgraph}
@@ -1119,22 +1125,27 @@ PYEOF
                 echo "[GEP2] tidk find completed, checking for output files..."
                 ls -la "$TEMP_DIR"/ 2>/dev/null || true
                 
-                RAW_BG=$(ls "$TEMP_DIR"/*.bedgraph 2>/dev/null | head -1) || true
-                
-                if [ -n "$RAW_BG" ] && [ -s "$RAW_BG" ]; then
-                    echo "[GEP2] Found bedgraph file: $RAW_BG"
-                    head -5 "$RAW_BG"
-                    
+                RAW_TSV=$(ls "$TEMP_DIR"/*windows*.tsv 2>/dev/null | head -1) || true
+
+                if [ -n "$RAW_TSV" ] && [ -s "$RAW_TSV" ]; then
+                    echo "[GEP2] Found TSV file: $RAW_TSV"
+                    head -5 "$RAW_TSV"
+
                     awk 'BEGIN{{OFS="\\t"}}
-                         !/^#/ && NF>=4 {{printf "%s\\t%s\\t%s\\t%d\\n", $1, $2, $3, int($4)}}' \
-                         "$RAW_BG" > {output.bedgraph}
+                         NR>1 && NF>=4 {{
+                             chrom=$1
+                             end=$2
+                             start=end-1000
+                             total=int($3)+int($4)
+                             printf "%s\\t%d\\t%d\\t%d\\n", chrom, start, end, total
+                         }}' "$RAW_TSV" > {output.bedgraph}
                     TRACK_CREATED=true
                     echo "[GEP2] Telomere track created with clade $CLADE"
                 else
-                    echo "[GEP2] No bedgraph file found after tidk find"
+                    echo "[GEP2] No TSV file found after tidk find"
                 fi
-            else
-                echo "[GEP2] No matching TIDK clade found in lineage"
+             else
+                 echo "[GEP2] No matching TIDK clade found in lineage"
             fi
             
             # Fallback: use tidk explore if no clade match or tidk find failed
@@ -1173,9 +1184,8 @@ PYEOF
                         awk 'BEGIN{{OFS="\\t"}}
                              NR>1 && NF>=4 {{
                                  chrom=$1
-                                 window=$2
-                                 start=(window-1)*1000
-                                 end=window*1000
+                                 end=$2
+                                 start=end-1000
                                  total=int($3)+int($4)
                                  printf "%s\\t%d\\t%d\\t%d\\n", chrom, start, end, total
                              }}' "$RAW_TSV" > {output.bedgraph}

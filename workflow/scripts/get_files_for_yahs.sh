@@ -290,6 +290,6 @@ echo "[GEP2]   PA5:         $OUT_PA5"
 echo
 echo "Suggested YaHS command (run from any directory):"
 echo "  yahs --file-type PA5 --read-length $READ_LEN \\"
-echo "       -o ${OUTDIR}/yahs_out \\"
+echo "       -o ${OUTDIR}/${ASM_BASE}.yahs_out \\"
 echo "       $ASM_FOR_YAHS \\"
 echo "       $OUT_PA5"

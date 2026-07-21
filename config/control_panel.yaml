@@ -160,3 +160,7 @@ SKIP_BLOB: off
 ### SwissProt DB is ~1 GB (~2 GB during build), while Ref Proteomes is ~50 GB (~1 TB during build)
 ### Caution: "thorough" and "full" options are VERY VERY SERIOUSLY SLOW!!!
 DIAMOND_MODE: quick
+
+
+# ERGA Assembly Report yaml template --------------------------------------------------------------
+EAR_YAML: off   # generate an ERGA EAR YAML template per assembly id (experimental)

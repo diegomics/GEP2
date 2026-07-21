@@ -182,7 +182,7 @@ def _get_uli_input(w):
     return g["r"]
 
 
-def _get_hifiasm_input(w):
+def _get_hifi_input(w):
     """Get HiFi reads for adapter filtering."""
     g = _pick_centralized_group(w)
     return g["r"]
@@ -731,7 +731,7 @@ EOF
 rule B05_filter_hifi_adapters:
     """Filter HiFi reads containing SMRTbell adapter sequences using bbduk."""
     input:
-        reads = _get_hifiasm_input,
+        reads = _get_hifi_input,
         adapters = workflow.source_path("../scripts/hifi_blocklist.fa")
     output:
         filtered = os.path.join(

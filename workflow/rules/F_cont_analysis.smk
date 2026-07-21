@@ -161,8 +161,9 @@ def _get_blob_read_files(species, asm_id, target_read_type):
                     for ext in ['.fq.gz', '.fastq.gz']:
                         if base.endswith(ext):
                             base = base[:-len(ext)]
-                    # Strip pair suffix and processing suffixes
-                    base = re.sub(r'[_.]?[12]$', '', base)
+                    # Strip pair suffix (only for paired-end types, and only a real _1/_2 or .1/.2 delimiter)
+                    if is_paired:
+                        base = re.sub(r'[_.][12]$', '', base)
                     base = base.replace("_trimmed", "").replace("_filtered", "").replace("_corrected", "")
 
                     base_dir = os.path.join(
