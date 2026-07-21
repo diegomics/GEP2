@@ -1,7 +1,7 @@
 # GEP2 - Genome Evaluation Pipeline 2
 # by Diego De Panis, 2025
 # note: AI tools may have been used to improve, clean and/or comment this version of the code
-GEP2_VER = "0.5.2"
+GEP2_VER = "0.6"
 
 # Debug verbosity (set to True for detailed DAG building messages)
 VERBOSE = False
