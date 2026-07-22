@@ -99,6 +99,8 @@ Load the conda environment like `conda activate GEP2_env` and in the GEP2 folder
 ```bash
 nohup snakemake --profile execution/slurm &
 ```
+> A convenient way to check which particular rules are running on the jobs is:<br>
+> `squeue --me -o "%.18i %.9P %.8j %.8T %.10M %.9l %.6D %R %k"` (or use -u $USER instead of --me).
 
 #### On Local Computer:
 
