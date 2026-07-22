@@ -137,13 +137,13 @@ snakemake --profile execution/local --rerun-incomplete -n
 ```bash
 #!/bin/bash
 
-#SBATCH -J game_controller
+#SBATCH -J gep2_controller
 ### Add your Slurm parameters here (partition, std out, etc.)
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
 #SBATCH --time=5-00:00:00
 
-conda activate GAME_env # or the way you use to load the conda env in a job script
+conda activate GEP2_env # or the way you use to load the conda env in a job script
 
 # Prevent common issues with Slurm environment variables and Snakemake
 for var in $(env | grep -i "^SLURM_" | cut -d= -f1); do
