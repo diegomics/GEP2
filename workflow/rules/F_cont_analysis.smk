@@ -1227,8 +1227,8 @@ rule F05_map_reads_for_blob:
                 done
 
                 echo "[GEP2] Merging $PAIR_IDX partial BAMs..."
-                sambamba merge \
-                    -t {threads} \
+                samtools merge \
+                    -@ {threads} \
                     {output.bam} \
                     "${{PARTIAL_BAMS[@]}}"
 
@@ -1251,13 +1251,13 @@ rule F05_map_reads_for_blob:
         echo "[GEP2] BAM size: $((BAM_SIZE / 1024 / 1024)) MB"
 
         # Quick validation: check BAM header
-        if ! sambamba view -H {output.bam} > /dev/null 2>&1; then
+        if ! samtools view -H {output.bam} > /dev/null 2>&1; then
             echo "[GEP2] ERROR: Output BAM file is not valid" >&2
             exit 1
         fi
 
         # Count mapped reads
-        MAPPED=$(sambamba flagstat -t {threads} {output.bam} 2>/dev/null | head -1 | awk '{{print $1}}')
+        MAPPED=$(samtools flagstat -@ {threads} {output.bam} 2>/dev/null | head -1 | awk '{{print $1}}')
         echo "[GEP2] Total alignments: $MAPPED"
 
         echo "[GEP2] Read mapping complete: {output.bam}"
