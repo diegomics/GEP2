@@ -815,6 +815,11 @@ rule F04_diamond_blastx:
         diamond_db  = DIAMOND_DB_PATH.replace(".dmnd", ""),
         sensitivity = DIAMOND_SENSITIVITY,
         db_type     = DIAMOND_DB_TYPE,
+        chunk       = 100000,
+        overlap     = 0,
+        max_chunks  = 10,
+        min_length  = 1000,
+        hit_count   = 10,
         outdir      = lambda w: os.path.join(
             config["OUT_FOLDER"], "GEP2_results", w.species, w.asm_id,
             "decontamination", "blobtools", w.asm_basename
@@ -845,25 +850,225 @@ rule F04_diamond_blastx:
         echo "[GEP2] Diamond DB:  {params.diamond_db} ({params.db_type})"
         echo "[GEP2] Sensitivity: {params.sensitivity}"
         echo "[GEP2] Threads:     {threads}"
+        echo "[GEP2] Chunking:    chunk={params.chunk} overlap={params.overlap} max_chunks={params.max_chunks} min_length={params.min_length}"
 
         mkdir -p {params.outdir}
+
+        if ! command -v python3 &>/dev/null; then
+            echo "[GEP2] ERROR: python3 not found in the container; required for query chunking" >&2
+            exit 1
+        fi
 
         # Get work directory for temp files (diamond uses temp space for large queries)
         WORK_DIR="$(gep2_get_workdir 50)"
         TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_diamond_{wildcards.species}_{wildcards.asm_basename}_XXXXXX")"
         trap 'rm -rf "$TEMP_DIR"' EXIT
 
+        # -------------------------------------------------------------------
+        # Step 1/3: chunk the assembly
+        # Chunk headers are "<original_name>_gep2c<index>_<offset>"; the offset
+        # is used in step 3 to restore genome coordinates.
+        # -------------------------------------------------------------------
+        cat > "$TEMP_DIR/chunk_fasta.py" <<'CHUNKEOF'
+import sys
+import gzip
+
+fasta = sys.argv[1]
+outfa = sys.argv[2]
+chunk = int(sys.argv[3])
+overlap = int(sys.argv[4])
+max_chunks = int(sys.argv[5])
+min_length = int(sys.argv[6])
+
+step = chunk - overlap
+if step < 1:
+    step = chunk
+
+stats = [0, 0, 0, 0]  # seqs_in, bp_in, chunks_out, bp_out
+
+
+def emit(fh, name, seq):
+    L = len(seq)
+    stats[0] += 1
+    stats[1] += L
+    if L < min_length:
+        return
+    starts = []
+    if L <= chunk * max_chunks:
+        s = 0
+        while s < L:
+            starts.append(s)
+            s += step
+    else:
+        seg = L // max_chunks
+        pad = (seg - chunk) // 2
+        if pad < 0:
+            pad = 0
+        for i in range(max_chunks):
+            starts.append(i * seg + pad)
+    n = 0
+    for s in starts:
+        e = s + chunk
+        if e > L:
+            e = L
+        sub = seq[s:e]
+        if len(sub) == 0:
+            continue
+        print(">" + name + "_gep2c" + str(n) + "_" + str(s), file=fh)
+        print(sub, file=fh)
+        n += 1
+        stats[2] += 1
+        stats[3] += len(sub)
+
+
+if fasta.endswith(".gz"):
+    fin = gzip.open(fasta, "rt")
+else:
+    fin = open(fasta, "rt")
+
+fout = open(outfa, "w")
+name = None
+parts = []
+for line in fin:
+    if line.startswith(">"):
+        if name is not None:
+            emit(fout, name, "".join(parts))
+        name = line[1:].split()[0]
+        parts = []
+    else:
+        parts.append(line.strip())
+if name is not None:
+    emit(fout, name, "".join(parts))
+fin.close()
+fout.close()
+
+print("[GEP2] input sequences: " + str(stats[0]), file=sys.stderr)
+print("[GEP2] input bp:        " + str(stats[1]), file=sys.stderr)
+print("[GEP2] output chunks:   " + str(stats[2]), file=sys.stderr)
+print("[GEP2] output bp:       " + str(stats[3]), file=sys.stderr)
+if stats[1] > 0:
+    pct = 100.0 * stats[3] / stats[1]
+    print("[GEP2] query retained:  " + str(round(pct, 2)) + " percent", file=sys.stderr)
+if stats[2] == 0:
+    print("[GEP2] ERROR: no chunks produced", file=sys.stderr)
+    sys.exit(1)
+CHUNKEOF
+
+        echo ""
+        echo "[GEP2] Step 1/3: chunking assembly"
+        python3 "$TEMP_DIR/chunk_fasta.py" \
+            "{input.asm}" \
+            "$TEMP_DIR/chunks.fasta" \
+            {params.chunk} \
+            {params.overlap} \
+            {params.max_chunks} \
+            {params.min_length}
+
+        # -------------------------------------------------------------------
+        # Step 2/3: diamond blastx on the chunked query
+        # -------------------------------------------------------------------
+        echo ""
+        echo "[GEP2] Step 2/3: diamond blastx"
+
+        # SwissProt is small enough to hold the reference index in a single
+        # chunk, which roughly halves runtime. Reference proteomes must stay
+        # chunked or memory use becomes unreasonable.
+        if [ "{params.db_type}" = "swissprot" ]; then
+            IDX_ARGS="--index-chunks 1"
+        else
+            IDX_ARGS=""
+        fi
+
         diamond blastx \
-            --query {input.asm} \
+            --query "$TEMP_DIR/chunks.fasta" \
             --db {params.diamond_db} \
             --outfmt 6 qseqid staxids bitscore qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore \
             {params.sensitivity} \
-            --max-target-seqs 1 \
+            --max-target-seqs 10 \
+            --max-hsps 1 \
             --evalue 1e-25 \
             --threads {threads} \
             --tmpdir "$TEMP_DIR" \
-            --block-size 4 \
-            --out {output.hits}
+            --block-size 2 \
+            $IDX_ARGS \
+            --out "$TEMP_DIR/chunked_hits.tsv"
+
+        NCHUNKHITS=$(wc -l < "$TEMP_DIR/chunked_hits.tsv")
+        echo "[GEP2] Chunk-level hits: $NCHUNKHITS"
+
+        # -------------------------------------------------------------------
+        # Step 3/3: unchunk
+        # Restores original sequence IDs, converts chunk-local query
+        # coordinates back to genome coordinates, and keeps only the top
+        # BLAST_HIT_COUNT hits per original sequence. The last part matters:
+        # without it, bestsumorder bitscore sums scale with contig length.
+        # -------------------------------------------------------------------
+        cat > "$TEMP_DIR/unchunk_blast.py" <<'UNCHUNKEOF'
+import sys
+from collections import defaultdict
+
+infile = sys.argv[1]
+outfile = sys.argv[2]
+count = int(sys.argv[3])
+
+TAB = chr(9)
+MARK = "_gep2c"
+hits = defaultdict(list)
+nbad = 0
+
+fin = open(infile, "rt")
+for line in fin:
+    line = line.rstrip()
+    if not line:
+        continue
+    f = line.split(TAB)
+    if len(f) < 15:
+        nbad += 1
+        continue
+    qid = f[0]
+    idx = qid.rfind(MARK)
+    offset = 0
+    orig = qid
+    if idx >= 0:
+        bits = qid[idx + len(MARK):].split("_")
+        if len(bits) == 2 and bits[1].isdigit():
+            offset = int(bits[1])
+            orig = qid[:idx]
+    f[0] = orig
+    f[3] = orig
+    try:
+        f[9] = str(int(f[9]) + offset)
+        f[10] = str(int(f[10]) + offset)
+    except ValueError:
+        pass
+    try:
+        score = float(f[2])
+    except ValueError:
+        score = 0.0
+    hits[orig].append((score, f))
+fin.close()
+
+fout = open(outfile, "w")
+nout = 0
+for orig in hits:
+    rows = sorted(hits[orig], key=lambda x: -x[0])[:count]
+    for score, f in rows:
+        print(TAB.join(f), file=fout)
+        nout += 1
+fout.close()
+
+print("[GEP2] sequences with hits: " + str(len(hits)), file=sys.stderr)
+print("[GEP2] hits written:        " + str(nout), file=sys.stderr)
+if nbad > 0:
+    print("[GEP2] WARNING: malformed lines skipped: " + str(nbad), file=sys.stderr)
+UNCHUNKEOF
+
+        echo ""
+        echo "[GEP2] Step 3/3: unchunking hits (top {params.hit_count} per sequence)"
+        python3 "$TEMP_DIR/unchunk_blast.py" \
+            "$TEMP_DIR/chunked_hits.tsv" \
+            {output.hits} \
+            {params.hit_count}
 
         # Verify output
         if [ ! -f {output.hits} ]; then
@@ -880,6 +1085,7 @@ rule F04_diamond_blastx:
 
         echo "[GEP2] Diamond blastx complete: {output.hits}"
         """
+
 
 # Maps the best available reads to the assembly to generate a sorted BAM file
 # for blobtools coverage calculation.
