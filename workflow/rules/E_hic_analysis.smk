@@ -267,7 +267,7 @@ def _get_long_reads_for_coverage(wildcards):
         read_type_dict = asm_data.get("read_type", {})
         
         # Master switch for read processing
-        reads_proc_enabled = _as_bool(config.get("READS_PROC", False))
+        reads_proc_enabled = _as_bool(config.get("READS_PROC", True))
         
         # Prefer HiFi, fall back to ONT
         for preferred_type in ["hifi", "ont"]:
@@ -284,7 +284,7 @@ def _get_long_reads_for_coverage(wildcards):
                 
                 # Determine if we should use processed or raw reads
                 if rt_normalized == "hifi":
-                    use_processed = reads_proc_enabled and _as_bool(config.get("FILTER_HIFI", False))
+                    use_processed = reads_proc_enabled and _as_bool(config.get("FILTER_HIFI", True))
                     proc_suffix = "_filtered.fq.gz"
                 elif rt_normalized == "ont":
                     use_processed = reads_proc_enabled and _as_bool(config.get("CORRECT_ONT", False))

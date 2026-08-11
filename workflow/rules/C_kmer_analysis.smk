@@ -16,11 +16,14 @@ def _get_processed_read_path(species, read_type, idx, base):
     
     reads_proc = _as_bool(config.get("READS_PROC", True))
     
-    if read_type_lower in ["illumina", "10x"]:
+    if read_type_lower in PE_READ_TYPES:
         if reads_proc and _as_bool(config.get("TRIM_PE", True)):
-            return os.path.join(base_dir, "processed", f"{read_type_lower}_Path{idx}_{base}_1_trimmed.fq.gz")
+            return [os.path.join(base_dir, "processed",
+                                 f"{read_type_lower}_Path{idx}_{base}_{r}_trimmed.fq.gz")
+                    for r in (1, 2)]
         else:
-            return os.path.join(base_dir, f"{read_type_lower}_Path{idx}_{base}_1.fq.gz")
+            return [os.path.join(base_dir, f"{read_type_lower}_Path{idx}_{base}_{r}.fq.gz")
+                    for r in (1, 2)]
     elif read_type_lower == "hifi":
         if reads_proc and _as_bool(config.get("FILTER_HIFI", True)):
             return os.path.join(base_dir, "processed", f"hifi_Path{idx}_{base}_filtered.fq.gz")
@@ -81,50 +84,46 @@ def get_per_read_kmer_input(wildcards):
             if matches:
                 return matches[0]
     
-    elif read_type in ["illumina", "10x"]:
+    elif read_type in PE_READ_TYPES:
         if reads_proc and _as_bool(config.get("TRIM_PE", True)):
-            pattern = os.path.join(base_dir, "processed", f"{read_type}_Path*_{base}_1_trimmed.fq.gz")
-            matches = glob.glob(pattern)
-            if matches:
-                return matches[0]
+            suffix = "_1_trimmed.fq.gz"
+            pattern = os.path.join(base_dir, "processed", f"{read_type}_Path*_{base}{suffix}")
         else:
-            pattern = os.path.join(base_dir, f"{read_type}_Path*_{base}_1.fq.gz")
-            matches = glob.glob(pattern)
-            if matches:
-                return matches[0]
+            suffix = "_1.fq.gz"
+            pattern = os.path.join(base_dir, f"{read_type}_Path*_{base}{suffix}")
+
+        matches = glob.glob(pattern)
+        if matches:
+            r1 = matches[0]
+            r2 = r1[: -len(suffix)] + suffix.replace("_1", "_2", 1)
+            return [r1, r2]
     
     raise ValueError(f"Could not find processed read file for {species}/{read_type}/{base}")
 
 
 def get_assembly_kmer_db_inputs(wildcards):
     """Per-read k-mer DBs needed for an assembly (Meryl or FastK)."""
-    if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
+    priority_rt = kmer_read_type(wildcards.species, wildcards.asm_id)
+    if not priority_rt:
         return []
+    kmer_len = get_kmer_length(priority_rt)
     reads = _get_reads_for_assembly(wildcards.species, wildcards.asm_id)
-    priority_rt = get_priority_read_type_for_assembly(wildcards.species, wildcards.asm_id)
-    kmer_len = get_kmer_length(priority_rt) if priority_rt else 31
     return [kmer_per_read_db(wildcards.species, r["read_type"], kmer_len, r["base"])
             for r in reads]
 
 
 def get_merqury_db_input(wildcards):
     """Merged k-mer DB for this assembly (Meryl .meryl dir or FastK .ktab)."""
-    if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
-        return []
-    read_type = get_priority_read_type(wildcards.species)
+    read_type = kmer_read_type(wildcards.species, wildcards.asm_id)
     if not read_type:
-        raise ValueError(f"No reads available for {wildcards.species}")
+        raise ValueError(
+            f"[GEP2] Merqury requested for {wildcards.species}/{wildcards.asm_id}, but "
+            f"k-mer analysis is disabled for it (KMER_STATS / skip flag / DATA_PRIORITY). "
+            f"Some rule is requesting Merqury outputs without gating on kmer_read_type()."
+        )
     kmer_len = get_kmer_length(read_type)
     return kmer_asm_db(wildcards.species, wildcards.asm_id, kmer_len)
-    
-    read_type = get_priority_read_type(wildcards.species)
-    if not read_type:
-        raise ValueError(f"No reads available for {wildcards.species}")
-    kmer_len = get_kmer_length(read_type)
-    return os.path.join(
-        config["OUT_FOLDER"], "GEP2_results", wildcards.species,
-        wildcards.asm_id, f"k{kmer_len}", f"{wildcards.asm_id}.meryl"
-    )
+
 
 def get_merqury_asm_inputs(wildcards):
     """Get assembly files for Merqury, in sorted order."""

@@ -1,7 +1,7 @@
 # GEP2 - Genome Evaluation Pipeline 2
 # by Diego De Panis, 2025
 # note: AI tools may have been used to improve, clean and/or comment this version of the code
-GEP2_VER = "0.6"
+GEP2_VER = "0.7"
 
 # Debug verbosity (set to True for detailed DAG building messages)
 VERBOSE = False
@@ -124,6 +124,8 @@ def _is_10x(read_type):
     """Check if read type is 10x (needs barcode trimming)"""
     return str(read_type).lower() == "10x"
 
+
+PE_READ_TYPES = ("illumina", "10x", "hic")
 
 def normalize_read_type(read_type):
     """
@@ -1265,6 +1267,14 @@ def load_samples_config():
                     try:
                         with manifest_check.open() as f:
                             prev_manifest = json.load(f)
+
+                        def _dl_exists(e):
+                            dest = str(e["destination"])
+                            if e.get("paired"):
+                                return (Path(dest + "_1.fastq.gz").exists() and
+                                        Path(dest + "_2.fastq.gz").exists())
+                            return Path(dest).exists()
+
                         missing = [e for e in prev_manifest if not Path(e["destination"]).exists()]
                         if missing:
                             print(f"[GEP2] {len(missing)} previously queued download(s) not yet on disk, re-processing from table...")
@@ -1470,7 +1480,7 @@ def get_priority_read_type(species):
         if prio_type in available_types:
             return prio_type
     
-    return list(available_types)[0] if available_types else None
+    return None
 
 
 def get_kmer_length(read_type):
@@ -1555,7 +1565,7 @@ def _enumerate_centralized_groups(species, read_type):
     read_type_lower = read_type.lower() 
     is_pe = read_type_lower in ["illumina", "10x", "hic"]
     
-    for i, key in enumerate(sorted(reads_dict.keys()), 1):
+    for i, key in enumerate(sorted(reads_dict.keys(), key=lambda k: int(k[4:])), 1):
         val = reads_dict[key]
         
         if isinstance(val, str) and "," in val:
@@ -1686,9 +1696,22 @@ def get_priority_read_type_for_assembly(species, asm_id):
             if prio_type in available_types:
                 return prio_type
         
-        return list(available_types)[0] if available_types else None
+        return None
     except (KeyError, TypeError, AttributeError):
         return None
+
+
+def kmer_read_type(species, asm_id):
+    """Read type to use for k-mer analysis, or None if it must be skipped.
+    Single source of truth: KMER_STATS + per-assembly skip + DATA_PRIORITY."""
+    if not _as_bool(config.get("KMER_STATS", True)):
+        return None
+    if _should_skip_analysis(species, asm_id, "kmer"):
+        return None
+    rt = get_priority_read_type_for_assembly(species, asm_id)
+    if rt is None or rt not in _parse_tech_priority():
+        return None
+    return rt
 
 
 def _get_unique_reads_for_species(species, read_type):
@@ -1905,11 +1928,11 @@ def get_kmer_stats_results():
                 continue
             
             # Get priority read type for this assembly
-            read_type = get_priority_read_type_for_assembly(species, asm_id)
+            read_type = kmer_read_type(species, asm_id)
             
             if not read_type:
                 if IS_MAIN:
-                    print(f"[GEP2] No reads for {species}/{asm_id}, skipping k-mer analysis")
+                    print(f"[GEP2] No usable reads for k-mer analysis in {species}/{asm_id}, skipping")
                 continue
             
             # Skip if priority read type is not in DATA_PRIORITY
@@ -2057,7 +2080,7 @@ def get_reads_only_profiling_results():
         return results
     
     # Get k-mer length based on priority
-    priority_order = config.get("DATA_PRIORITY", "hifi>illumina>ont>hic").lower().split(">")
+    priority_order = _parse_tech_priority()
     
     for species, sp_data in samples_config.get("sp_name", {}).items():
         for asm_id, asm_data in sp_data.get("asm_id", {}).items():

@@ -246,7 +246,7 @@ GEP2_results/
 | tool                                                              | doi                            | version | container                                                    |
 |:----------------------------------------------------------------- |:------------------------------ |:------- |:------------------------------------------------------------ |
 | [bedtools](https://github.com/arq5x/bedtools2)                    | 10.1093/bioinformatics/btq033  | 2.31.1  | docker://diegomics/hic_analysis:0.2                          |
-| [blobtools](https://github.com/genomehubs/blobtoolkit)            | -                              | 4.5.1   | docker://genomehubs/blobtoolkit:4.5.1                        |
+| [blobtools](https://github.com/genomehubs/blobtoolkit)            | -                              | 4.5.5   | docker://genomehubs/blobtoolkit:4.5.5                        |
 | [bbmap](https://sourceforge.net/projects/bbmap)                   | 10.1371/journal.pone.0185056   | 39.81   | docker://diegomics/gep2_base:0.4                             |
 | [busco](https://gitlab.com/ezlab/busco)                           | 10.1093/molbev/msab199         | 6.1.0   | docker://ezlabgva/busco:v6.1.0_cv1                           |
 | [bwa-mem2](https://github.com/bwa-mem2/bwa-mem2)                  | 10.1109/IPDPS.2019.00041       | 2.3     | docker://diegomics/hic_analysis:0.2                          |

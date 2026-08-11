@@ -81,31 +81,7 @@ def get_report_busco_inputs(wildcards):
 
 def get_report_merqury_inputs(wildcards):
     """Get Merqury output files if k-mer analysis was run."""
-    # Global toggle
-    if not _as_bool(config.get("KMER_STATS", True)):
-        return {'qv': [], 'completeness': []}
-    
-    # Per-assembly skip
-    if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
-        return {'qv': [], 'completeness': []}
-    
-    # Check if this assembly has reads
-    try:
-        asm_data = samples_config["sp_name"][wildcards.species]["asm_id"][wildcards.asm_id]
-        read_type_dict = asm_data.get("read_type", {})
-        
-        has_any_reads = False
-        for read_type, rt_data in read_type_dict.items():
-            if read_type and read_type != "None" and rt_data:
-                read_files = rt_data.get("read_files", {})
-                if any(v and v != "None" for v in read_files.values()):
-                    has_any_reads = True
-                    break
-        
-        if not has_any_reads:
-            return {'qv': [], 'completeness': []}
-            
-    except (KeyError, TypeError, AttributeError):
+    if not kmer_read_type(wildcards.species, wildcards.asm_id):
         return {'qv': [], 'completeness': []}
     
     merqury_dir = os.path.join(
@@ -121,16 +97,7 @@ def get_report_merqury_inputs(wildcards):
 
 def get_report_genomescope_input(wildcards):
     """Get GenomeScope2 plot if k-mer analysis was run."""
-    # Global toggle
-    if not _as_bool(config.get("KMER_STATS", True)):
-        return []
-    
-    # Per-assembly skip
-    if _should_skip_analysis(wildcards.species, wildcards.asm_id, "kmer"):
-        return []
-    
-    read_type = get_priority_read_type_for_assembly(wildcards.species, wildcards.asm_id)
-    
+    read_type = kmer_read_type(wildcards.species, wildcards.asm_id)
     if not read_type:
         return []
     

@@ -9,7 +9,7 @@
 DATA_TABLE: "https://docs.google.com/spreadsheets/d/1xmsstJGBo45SEQgCPncE76u51_VN5IDG9sFFafYkGfI/edit?usp=sharing"
 
 # Path where a folder named GEP2_results will be created
-OUT_FOLDER: "/scratch/ddepanis/gep2_test_results"
+OUT_FOLDER: "/srv/public/users/ddepanis/results"
 
 # Per job max resources
 myCPU: 24      # Maximum cores per job (2-24)
@@ -33,7 +33,7 @@ FAST_TEMP_DIR: "/dev/shm"
 # Options: "auto" (creates a 'databases' folder inside the GEP2 base folder), or specify a path 
 # "/path/to/dir" to use that particular folder to put all the folders
 ## Databases are downloaded once and reused across runs (caution: they take disk space!!!)
-DB_FOLDER: "auto"
+DB_FOLDER: "/srv/public/users/ddepanis/DBs"
 
 
 ###################################################################################################

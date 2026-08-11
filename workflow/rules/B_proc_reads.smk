@@ -40,39 +40,20 @@ else:
 
 def _get_source_for_centralized_read(wildcards):
     """Find the source file that needs to be symlinked to the centralized location."""
-    # The centralized path is the output of B00
     centralized_path = os.path.join(
         config["OUT_FOLDER"], "GEP2_results", "data",
         wildcards.species, "reads", wildcards.read_type, wildcards.filename
     )
 
-    # DEBUG
-    found = centralized_path in CENTRALIZE_MAP
-    if not found and CENTRALIZE_MAP:
-        # Show first key to compare format
-        first_key = next(iter(CENTRALIZE_MAP))
-    
-    # Look up the original source
     if centralized_path in CENTRALIZE_MAP:
         return CENTRALIZE_MAP[centralized_path]
-    
-    # Fallback for downloads: construct downloaded_data path
-    identifier = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', wildcards.filename, flags=re.IGNORECASE)
-    identifier = identifier.replace('.fq.gz', '').replace('.fastq.gz', '')
-    
-    base_path = os.path.join(
-        config["OUT_FOLDER"], "GEP2_results", "downloaded_data",
-        wildcards.species, "reads"
-    )
-    
-    for rt_variant in [wildcards.read_type, wildcards.read_type.upper(), wildcards.read_type.lower()]:
-        for ext in [".fastq.gz", ".fq.gz"]:
-            pattern = os.path.join(base_path, rt_variant, f"{identifier}{ext}")
-            if os.path.exists(pattern):
-                return pattern
-    
-    return os.path.join(
-        base_path, wildcards.read_type.lower(), f"{identifier}.fastq.gz"
+
+    raise ValueError(
+        f"[GEP2] No source for centralized read:\n"
+        f"  {centralized_path}\n"
+        f"centralize_map.json has {len(CENTRALIZE_MAP)} entries, e.g.:\n  "
+        + "\n  ".join(list(CENTRALIZE_MAP)[:3])
+        + "\nA rule requested a read filename that centralization never produced."
     )
 
 
@@ -95,7 +76,7 @@ def _compressible_long_src(w):
 
 def _linkable_pe_r1(w):
     """Get R1 source for linking PE reads."""
-    if config.get("TRIM_PE", True):
+    if _as_bool(config.get("TRIM_PE", True)):
         return _MISSING_IN
     g = _pick_centralized_group(w)
     yaml_path = str(g["r1"])
@@ -108,7 +89,7 @@ def _linkable_pe_r1(w):
 
 def _linkable_pe_r2(w):
     """Get R2 source for linking PE reads."""
-    if config.get("TRIM_PE", True):
+    if _as_bool(config.get("TRIM_PE", True)):
         return _MISSING_IN
     g = _pick_centralized_group(w)
     yaml_path = str(g["r2"])
@@ -148,7 +129,7 @@ def _resolve_centralized_source(yaml_path, read_type, species):
 
 def _compressible_pe_r1(w):
     """Get R1 source for compressing PE reads."""
-    if config.get("TRIM_PE", True):
+    if _as_bool(config.get("TRIM_PE", True)):
         return _MISSING_IN
     g = _pick_centralized_group(w)
     needs = (not str(g["r1"]).endswith(".gz")) or (not str(g["r2"]).endswith(".gz"))
@@ -157,7 +138,7 @@ def _compressible_pe_r1(w):
 
 def _compressible_pe_r2(w):
     """Get R2 source for compressing PE reads."""
-    if config.get("TRIM_PE", True):
+    if _as_bool(config.get("TRIM_PE", True)):
         return _MISSING_IN
     g = _pick_centralized_group(w)
     needs = (not str(g["r1"]).endswith(".gz")) or (not str(g["r2"]).endswith(".gz"))
@@ -166,7 +147,7 @@ def _compressible_pe_r2(w):
 
 def _get_ont_reads_for_correction(w):
     """Get ONT reads for correction if enabled."""
-    if not config.get("CORRECT_ONT", True):
+    if not _as_bool(config.get("CORRECT_ONT", False)):
         return _MISSING_IN
     
     if w.read_type.lower() != "ont":
@@ -242,7 +223,7 @@ def _get_qc_reports_for_multiqc(w):
                     os.path.join(report_dir, f"{rt_lower}_Path{idx}_{base}_fastqc.zip")
                 ])
                 
-                if config.get("FILTER_HIFI", True):
+                if _as_bool(config.get("FILTER_HIFI", True)):
                     reports.extend([
                         os.path.join(report_dir, f"{rt_lower}_Path{idx}_{base}_bbduk.stats"),
                         os.path.join(report_dir, f"{rt_lower}_Path{idx}_{base}_filtered_nanoplot")
@@ -257,7 +238,7 @@ def _get_qc_reports_for_multiqc(w):
                     os.path.join(report_dir, f"{rt_lower}_Path{idx}_{base}_fastqc.zip")
                 )
                 
-                if config.get("CORRECT_ONT", True):
+                if _as_bool(config.get("CORRECT_ONT", False)):
                     reports.append(
                         os.path.join(report_dir, f"{rt_lower}_Path{idx}_{base}_corrected_nanoplot")
                     )
@@ -272,7 +253,7 @@ def _get_qc_reports_for_multiqc(w):
                 os.path.join(report_dir, f"{read_type_lower}_Path{idx}_{base}_2_fastqc.zip")
             ])                    
 
-            if config.get("TRIM_PE", True):
+            if _as_bool(config.get("TRIM_PE", True)):
                 reports.append(os.path.join(report_dir, f"{read_type_lower}_Path{idx}_{base}_fastp.json"))
     
     return reports
