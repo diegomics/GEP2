@@ -703,11 +703,8 @@ def get_reads_only_kmer_db_inputs(wildcards):
                     if not path_value or path_value == "None":
                         continue
 
-                    basename = os.path.basename(str(path_value))
-                    base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', basename, flags=re.IGNORECASE)
-                    base = base.replace(".fq.gz", "").replace(".fastq.gz", "")
-                    base = base.replace("_1", "").replace("_2", "")
-                    base = base.replace("_filtered", "").replace("_corrected", "").replace("_trimmed", "")
+                    first = str(path_value).split(",")[0].strip()
+                    base = read_base_from_path(first, read_type in PE_READ_TYPES)
                     db_path = kmer_per_read_db(species, read_type, kmer_len, base)
 
                     if db_path not in inputs:

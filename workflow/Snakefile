@@ -127,6 +127,28 @@ def _is_10x(read_type):
 
 PE_READ_TYPES = ("illumina", "10x", "hic")
 
+_PROC_SUFFIXES = ("_trimmed", "_filtered", "_corrected")
+
+def read_base_from_path(path, paired):
+    """Canonical read-set base from a centralized or processed read filename.
+
+    Mirrors what centralize_reads() writes:
+      {read_type}_Path{idx}_{base}[_1|_2][_trimmed|_filtered|_corrected].fq.gz
+    """
+    name = os.path.basename(str(path))
+    name = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', name, flags=re.IGNORECASE)
+    for ext in ('.fq.gz', '.fastq.gz', '.fq', '.fastq'):
+        if name.endswith(ext):
+            name = name[:-len(ext)]
+            break
+    for suf in _PROC_SUFFIXES:
+        if name.endswith(suf):
+            name = name[:-len(suf)]
+            break
+    if paired:
+        name = re.sub(r'_[12]$', '', name)
+    return name
+
 def normalize_read_type(read_type):
     """
     Normalize read type names to standard lowercase versions.
@@ -1138,8 +1160,12 @@ def centralize_reads(yaml_data: dict, out_folder: Path) -> dict:
                     for ext in ['.fq.gz', '.fastq.gz', '.fq', '.fastq', '.gz']:
                         if clean_name.endswith(ext):
                             clean_name = clean_name[:-len(ext)]
-                    # Strip trailing pair suffix from R1 to get shared base
-                    clean_name = re.sub(r'[_.]?([Rr]?[12])$', '', clean_name)
+                    
+                    # Illumina/bcl2fastq: collapse the mate digit but keep the chunk
+                    # number (…_R1_001 -> …_R_001), so chunks stay distinguishable.
+                    clean_name = re.sub(r'([._])R[12](_\d+)$', r'\1R\2', clean_name)
+                    # SRA/plain: strip a trailing mate marker (…_1, …_R2, ….1, …R2)
+                    clean_name = re.sub(r'(?:[._]R?|R)[12]$', '', clean_name)
 
                     r1_central = str(central_dir / f"{read_type_normalized}_Path{path_idx}_{clean_name}_1.fq.gz")
                     r2_central = str(central_dir / f"{read_type_normalized}_Path{path_idx}_{clean_name}_2.fq.gz")
@@ -1275,7 +1301,14 @@ def load_samples_config():
                                         Path(dest + "_2.fastq.gz").exists())
                             return Path(dest).exists()
 
-                        missing = [e for e in prev_manifest if not Path(e["destination"]).exists()]
+                        def _dl_exists(e):
+                            dest = str(e["destination"])
+                            if e.get("paired"):
+                                return (Path(dest + "_1.fastq.gz").exists() and
+                                        Path(dest + "_2.fastq.gz").exists())
+                            return Path(dest).exists()
+
+                        missing = [e for e in prev_manifest if not _dl_exists(e)]
                         if missing:
                             print(f"[GEP2] {len(missing)} previously queued download(s) not yet on disk, re-processing from table...")
                             need_full_processing = True
@@ -1574,10 +1607,15 @@ def _enumerate_centralized_groups(species, read_type):
             paths = val
         else:
             paths = [val]
-        
+
+        # PathN is assigned by centralize_reads per read set. The filename is the
+        # ground truth - the YAML key, the centralize map and D/E/F all agree with it.
+        m = re.search(r'_Path(\d+)_', os.path.basename(str(paths[0])))
+        idx = int(m.group(1)) if m else i
+
         if is_pe and len(paths) >= 2:
             r1, r2 = paths[0], paths[1]
-            base = os.path.basename(r1).replace("_set1", "").replace("_set2", "")
+            base = os.path.basename(r1)
             # Remove extension first
             for ext in ['.fq.gz', '.fastq.gz']:
                 if base.endswith(ext):
@@ -1589,7 +1627,7 @@ def _enumerate_centralized_groups(species, read_type):
             base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', base, flags=re.IGNORECASE)
             
             yield {
-                "idx": i,
+                "idx": idx,
                 "rt": read_type_lower,
                 "kind": "pe",
                 "r1": r1,
@@ -1598,12 +1636,12 @@ def _enumerate_centralized_groups(species, read_type):
             }
         else:
             r = paths[0]
-            base = os.path.basename(r).replace("_set1", "").replace("_set2", "")
+            base = os.path.basename(r)
             base = base.replace(".fq.gz", "").replace(".fastq.gz", "")
             base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', base, flags=re.IGNORECASE)
             
             yield {
-                "idx": i,
+                "idx": idx,
                 "rt": read_type_lower,
                 "kind": "long",
                 "r": r,
@@ -1613,11 +1651,17 @@ def _enumerate_centralized_groups(species, read_type):
 
 def _pick_centralized_group(w):
     """Pick the read group based on wildcards for centralized structure"""
+    base = getattr(w, "base", None)
     for grp in _enumerate_centralized_groups(w.species, w.read_type):
-        if str(grp["idx"]) == str(w.idx):
+        if str(grp["idx"]) != str(w.idx):
+            continue
+        if base is None or grp["base"] == base:
             return grp
-    
-    raise ValueError(f"Could not find group Path{w.idx} for {w.species}/{w.read_type}")
+
+    raise ValueError(
+        f"Could not find read group Path{w.idx} / base '{base}' "
+        f"for {w.species}/{w.read_type}"
+    )
 
 
 def get_original_read_path(species, read_type, filename):
@@ -1742,12 +1786,9 @@ def _get_unique_reads_for_species(species, read_type):
                         paths = [path_value]
                     
                     for p in paths:
-                        basename = os.path.basename(p)
-                        base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', basename, flags=re.IGNORECASE)
-                        base = base.replace(".fq.gz", "").replace(".fastq.gz", "")
-                        base = base.replace("_1", "").replace("_2", "")
-                        base = base.replace("_filtered", "").replace("_corrected", "").replace("_trimmed", "")
-                        unique_bases.add(base)
+                        unique_bases.add(
+                            read_base_from_path(p, read_type_lower in PE_READ_TYPES)
+                        )
         
         return unique_bases
     except (KeyError, TypeError, AttributeError):
@@ -2042,11 +2083,7 @@ def _get_reads_for_assembly(species, asm_id):
                     paths = [path_value]
                 
                 for p in paths:
-                    basename = os.path.basename(p)
-                    base = re.sub(r'^(hifi|ont|illumina|10x|hic)_Path\d+_', '', basename, flags=re.IGNORECASE)
-                    base = base.replace(".fq.gz", "").replace(".fastq.gz", "")
-                    base = base.replace("_1", "").replace("_2", "")
-                    base = base.replace("_filtered", "").replace("_corrected", "").replace("_trimmed", "")
+                    base = read_base_from_path(p, read_type in PE_READ_TYPES)
                     
                     reads_info.append({
                         "read_type": read_type,

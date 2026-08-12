@@ -296,7 +296,9 @@ rule B00_centralize_reads:
             real_src = os.path.realpath(src)
             cmd = f'ln -sf "{real_src}" "{dest}" && echo "Centralized {src} to {dest}" > {log} 2>&1'
         else:
-            cmd = f'echo "Warning: Source file not found: {src}, creating placeholder symlink" > {log} 2>&1 && ln -sf "{src}" "{dest}"'
+            raise ValueError(
+                f"[GEP2] Source file for centralization does not exist: {src}"
+            )
         
         shell(cmd)
 

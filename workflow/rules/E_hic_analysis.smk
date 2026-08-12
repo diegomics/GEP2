@@ -101,10 +101,7 @@ def _get_hic_reads_for_assembly(species, asm_id):
                 # Extract base names and construct processed paths
                 seen_bases = set()
                 for p in paths:
-                    basename = os.path.basename(p)
-                    base = re.sub(r'^(hic)_Path\d+_', '', basename, flags=re.IGNORECASE)
-                    base = base.replace(".fq.gz", "").replace(".fastq.gz", "")
-                    base = base.replace("_1", "").replace("_2", "")
+                    base = read_base_from_path(p, True)   # hic is always paired
                     
                     if base in seen_bases:
                         continue
