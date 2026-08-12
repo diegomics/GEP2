@@ -22,84 +22,6 @@ from typing import Any, Optional
 __version__ = "0.1.0"
 
 # -------------------------------------------------------------------------------
-# TYPE ALIASES
-# -------------------------------------------------------------------------------
-
-AssemblyData = dict[str, Any]          # result of parse_assembly_report()
-ThresholdSpec = dict[str, Any]         # one entry of THRESHOLDS
-SuperTable = pd.DataFrame              # uses pandas-DataFrame
-
-# -------------------------------------------------------------------------------
-# THRESHOLDS / CONFIGURATION
-# -------------------------------------------------------------------------------
-
-THRESHOLDS: dict[str, ThresholdSpec] = {
-    "contig_n50": {
-        "source": "EBP Report v7 (2026) / VGP-Notation",
-        "direction": "higher_better",
-        "tiers": [(1_000_000, "PASS")],   # > 1 Mb (part of 6.C.Q40)
-        "fallback": "FAIL",
-    },
-    "scaffold_n50": {
-        "source": "EBP Report v7 (2026)",
-        "direction": None,
-        "tiers": None,
-    },
-    "gaps_per_gbp": {
-        "source": "VGP-Paper",
-        "direction": "lower_better",
-        "tiers": [(200, "****"), (1000, "***-"), (10000, "**--")],
-        "fallback": "*---",
-    },
-    "structural_errors": {
-        "source": None,
-        "direction": None,
-        "tiers": None,
-    },
-    "merqury_qv": {
-        "source": "EBP Report v7 (2026) / VGP-Notation",
-        "direction": "higher_better",
-        "tiers": [(40.0, "PASS")],
-        "fallback": "FAIL",
-    },
-    "kmer_completeness_pct": {
-        "source": "EBP Report v7 (2026)",
-        "direction": "higher_better",
-        "tiers": [(90.0, "PASS")],
-        "fallback": "FAIL",
-    },
-    "busco_single_pct": {
-        "source": "EBP Report v7 (2026)",
-        "direction": "higher_better",
-        "tiers": [(90.0, "PASS")],
-        "fallback": "FAIL",
-    },
-    "busco_duplicated_pct": {
-        "source": "Pipeline-internal heuristic, conceptually supported by "
-                  "Simao et al. 2015 ('should be rare'), no exact literature value",
-        "direction": "lower_better",
-        "tiers": [(2.0, "****"), (5.0, "***-"), (7.0, "**--")],
-        "fallback": "*---",
-    },
-    "l90_haploid_proxy": {
-        "source": "GEP2-internal, proxy for chrom_seq_pct",
-        "direction": "lower_better",
-        "tiers": lambda ctx: (
-            [
-                (ctx["haploid_number"], "****"),
-                (ctx["haploid_number"] + 100, "***-"),
-                (ctx["haploid_number"] + 1000, "**--"),
-            ]
-            if ctx.get("haploid_number") is not None
-            else None
-        ),
-        "inclusive": True,  # "L90 <= n", not "L90 < n"
-        "fallback": "*---",
-    },
-}
-
-
-# -------------------------------------------------------------------------------
 # MARKDOWN-REPORT-PARSING
 # -------------------------------------------------------------------------------
 
@@ -116,6 +38,17 @@ def _clean_numeric(raw: str) -> Optional[float]:
         return float(raw)
     except ValueError:
         return None
+    
+def _clean_rating(raw:str) -> str:
+    raw = raw.strip()
+    if (not raw) or raw.upper() in ("N/A", "NAN"):
+        return None
+    raw = raw.replace("`", "")
+    try: 
+        return str(raw)
+    except Exception:
+        return None
+    
     
 def _map_metric_label(label: str) -> Optional[str]:
     """
@@ -152,7 +85,7 @@ def _map_metric_label(label: str) -> Optional[str]:
     
     return None
 
-def parse_assembly_report(report_path: str) -> AssemblyData:
+def parse_assembly_report(report_path: str) -> dict[str, Any]:
     """
     Parses a previously generated {asm_id}_report.md file (from make_gep2_report.py) and extracts raw data from it.
     """
@@ -160,7 +93,7 @@ def parse_assembly_report(report_path: str) -> AssemblyData:
     with open(report_path, encoding="utf-8") as f:
         content = f.read()
         
-    result: AssemblyData = {
+    result: dict[str, Any] = {
         "species": None, "taxon_id": None, "family": None, "asm_id": None,
         "haploid_number": None, "num_assemblies": 0, "completeness_tool": None, "kmer_tool": None,
         "metrics": {}
@@ -220,9 +153,14 @@ def parse_assembly_report(report_path: str) -> AssemblyData:
                 continue
  
             values = [_clean_numeric(cells[1])]
+            ratings = [_clean_rating(cells[2])]
+            
             if num_assemblies == 2 and len(cells) >= 4:
+                
                 values.append(_clean_numeric(cells[3]))
-            result["metrics"][internal_key] = values
+                ratings.append(_clean_rating(cells[4]))
+                
+            result["metrics"][internal_key] = tuple([values, ratings])
  
     return result
     
@@ -230,7 +168,7 @@ def parse_assembly_report(report_path: str) -> AssemblyData:
 # AGGREGATION ACROSS ALL ASSEMBLIES
 # -------------------------------------------------------------------------------
 
-def build_super_table(all_reports: list[AssemblyData]) -> SuperTable:
+def build_super_table(all_reports: list[dict[str, Any]]) -> pd.DataFrame:
     """
     The list of parsed reports is build into one table: one
     row per individual assembly file (e.g., asm1 '\n' asm2 for diploid assemblies).
@@ -266,8 +204,12 @@ def build_super_table(all_reports: list[AssemblyData]) -> SuperTable:
         
         for i in range(num_assemblies):
             row: dict[str, Any] = {**base_fields, "asm_file_nr": i + 1}
-            for metric_key, values in metrics.items():
+            for metric_key, (values, ratings) in metrics.items():
+                
                 row[metric_key] = values[i] if i < len(values) else None
+                
+                metrik_key_rating = f"{metric_key}_rating"
+                row[metrik_key_rating] = ratings[i] if i < len(values) else None
                 
             euka_single = row.pop("eukaryota_single", None)
             euka_dupl = row.pop("eukaryota_dupl", None)
@@ -283,101 +225,33 @@ def build_super_table(all_reports: list[AssemblyData]) -> SuperTable:
                     file=sys.stderr
                 )
 
+            euka_single_rating = row.pop("eukaryota_single_rating", None)
+            euka_dupl_rating = row.pop("eukaryota_dupl_rating", None)
+            other_single_rating = row.pop("other_single_rating", None)
+            other_dupl_rating = row.pop("other_dupl_rating", None)
+
             if has_other:
                 row["lineage"] = entry.get("other_lineage")
                 row["gene_compl_single"] = other_single
                 row["gene_compl_dupl"] = other_dupl
+                row["gene_compl_single_rating"] = other_single_rating
+                row["gene_compl_dupl_rating"] = other_dupl_rating
             elif has_euka:
                 row["lineage"] = entry.get("eukaryota_lineage")
                 row["gene_compl_single"] = euka_single
                 row["gene_compl_dupl"] = euka_dupl
+                row["gene_compl_single_rating"] = euka_single_rating
+                row["gene_compl_dupl_rating"] = euka_dupl_rating
             else:
                 row["lineage"] = None
                 row["gene_compl_single"] = None
                 row["gene_compl_dupl"] = None
+                row["gene_compl_single_rating"] = None
+                row["gene_compl_dupl_rating"] = None
 
             rows.append(row)
 
     return pd.DataFrame(rows)
-
-
-# -------------------------------------------------------------------------------
-# RATING
-# -------------------------------------------------------------------------------
-
-def rate_value(
-    metric_name: str,
-    value: Optional[float],
-    **context: Any) -> str:
-    """
-    Maps a raw value to a rating classification based on the THRESHOLDS listed above.
-    '····' consistently means “no rating available” -> both when a raw value is missing and when a threshold is missing or inapplicable
-    (e.g., structural errors, or an L90 proxy without a haploid_number).
-    """
-    
-    if value is None:
-        return "····"
- 
-    spec = THRESHOLDS.get(metric_name)
-    if spec is None:
-        return "····"
- 
-    tiers = spec.get("tiers")
-    if callable(tiers):
-        tiers = tiers(context)
-    if not tiers:
-        return "····"
- 
-    direction = spec.get("direction")
-    inclusive = spec.get("inclusive", False)
-    for boundary, rating in tiers:
-        if direction == "higher_better" and value > boundary:
-            return rating
-        if direction == "lower_better":
-            if inclusive and value <= boundary:
-                return rating
-            if not inclusive and value < boundary:
-                return rating
- 
-    return spec.get("fallback", "····")
-
-
-def add_ratings(super_table: SuperTable) -> SuperTable:
-    """
-    Adds an additional '<column>_rating' column for each metric column that can currently be rated.
-    l90_haploid_proxy is handled separately because it also requires haploid_number per row as context.
-    """
-    METRIC_COLUMN_MAP: dict[str, str] = {
-        "contig_n50": "contig_n50",
-        "gaps_per_gbp": "gaps_per_gbp",
-        "gene_compl_single": "busco_single_pct",
-        "gene_compl_dupl": "busco_duplicated_pct",
-        "merqury_qv": "merqury_qv",
-        "merqury_completeness": "kmer_completeness_pct"
-    }
- 
-    df = super_table.copy()
-    for column, metric_name in METRIC_COLUMN_MAP.items():
-        if column not in df.columns:
-            continue
-        numeric_values = pd.to_numeric(df[column], errors="coerce")
-        df[f"{column}_rating"] = [
-            rate_value(metric_name, None if pd.isna(v) else float(v))
-            for v in numeric_values
-        ]
-        
-    if "scaffold_l90" in df.columns:
-        ratings = []
-        for _, row in df.iterrows():
-            v = row.get("scaffold_l90")
-            n = row.get("haploid_number")
-            v = None if pd.isna(v) else float(v)
-            n = None if pd.isna(n) else int(n)
-            ratings.append(rate_value("l90_haploid_proxy", v, haploid_number=n))
-        df["scaffold_l90_rating"] = ratings 
-        
-    return df
-
 
 # -------------------------------------------------------------------------------
 # RENDERING / OUTPUT
@@ -492,7 +366,7 @@ def _format_haploid_number(row: pd.Series) -> str:
     return f"{int(value)}{marker}"
 
 def _prepare_display_table(
-    super_table: SuperTable,
+    super_table: pd.DataFrame,
     human_readable_bp: bool = False
     ) -> tuple[pd.DataFrame, dict[str, str]]:
     """
@@ -569,7 +443,7 @@ def _prepare_display_table(
 
 
 def render_markdown_table(
-    super_table: SuperTable,
+    super_table: pd.DataFrame,
     human_readable_bp: bool = False,
 ) -> str:
     """
@@ -599,17 +473,16 @@ def render_markdown_table(
 
 
 RATING_COLORS: dict[str, str] = {
-    "****": "#0072b2",
-    "***-": "#009e73",
-    "**--": "#f0e442",
-    "*---": "#f8696b",
-    "PASS": "#009e73",
-    "FAIL": "#f8696b",
+    "****": "#0072b2", # very good
+    "***-": "#009e73", # good
+    "**--": "#f0e442", # medium
+    "*---": "#f8696b", # not good
     "····": "#f0f0f0",  # no rating -> neutral
 }
 
 VALUE_DISPLAY_TO_RATING_COLUMN: dict[str, str] = {
     "Contig N50": "contig_n50_rating",
+    "Scaffold N50": "scaffold_n50_rating",
     "Gaps/Gbp": "gaps_per_gbp_rating",
     "Scaffold L90": "scaffold_l90_rating",
     "Gene Compl. Single (%)": "gene_compl_single_rating",
@@ -620,7 +493,7 @@ VALUE_DISPLAY_TO_RATING_COLUMN: dict[str, str] = {
 
 
 def render_html_heatmap(
-    super_table: SuperTable,
+    super_table: pd.DataFrame,
     human_readable_bp: bool = False,
     source_reports: Optional[list[str]] = None,
 ) -> str:
@@ -881,6 +754,7 @@ th {{
     position: sticky;
     top: 0;
     font-weight: 600;
+    text-align: left;
 }}
 
 tbody tr:nth-child(even) td {{
@@ -1035,18 +909,14 @@ def main() -> None:
     # ---------------------------------------------------------------
     # ------------------ Aggregating of Results: --------------------
 
-    all_data: list[AssemblyData] = [parse_assembly_report(p) for p in args.reports]
+    all_data: list[dict[str, Any]] = [parse_assembly_report(p) for p in args.reports]
  
     print("\nImported Reports:")
     for data in all_data:
         print(f"  {data['species']} / {data['asm_id']} (Completeness: {data['completeness_tool']}, k-mer: {data['kmer_tool']})")    
 
-    super_table: SuperTable = build_super_table(all_data)
-    super_table = add_ratings(super_table)
- 
-    print("")
-    print(super_table)
- 
+    super_table: pd.DataFrame = build_super_table(all_data)
+
     # ---------------------------------------------------------------
     # ------------------------- Output: -----------------------------
  
