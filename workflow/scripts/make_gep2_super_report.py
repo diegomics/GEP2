@@ -447,8 +447,6 @@ PLAIN_NUMERIC_COLUMNS: dict[str, int] = {
     "gaps_per_gbp": 1,
     "scaffold_l90": 0,
     "structural_errors": 0,
-    "gene_compl_single": 2,
-    "gene_compl_dupl": 2
 }
 
 def _format_plain_numeric(value: Any, decimals: int) -> str:
