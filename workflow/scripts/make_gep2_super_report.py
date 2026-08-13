@@ -266,7 +266,7 @@ COLUMN_DISPLAY_NAMES: dict[str, str] = {
     "taxon_id": "Taxon ID",
     "family": "Family",
     "haploid_number": "Haploid Number",
-    "asm_file_nr": "Assembly File #",
+    "asm_file_nr": "File #",
     "total_bp": "Total bp",
     "gaps_per_gbp": "Gaps/Gbp",
     "scaffold_n50": "Scaffold N50",
@@ -276,7 +276,7 @@ COLUMN_DISPLAY_NAMES: dict[str, str] = {
     "gene_compl_single": "Gene Compl. Single (%)",
     "gene_compl_dupl": "Gene Compl. Dupl. (%)",
     "merqury_qv": "k-mer QV",
-    "merqury_completeness": "k-mer Completeness (%)",
+    "merqury_completeness": "k-mer Compl. (%)",
     "structural_errors": "Structural Errors",
 }
 
@@ -497,7 +497,7 @@ VALUE_DISPLAY_TO_RATING_COLUMN: dict[str, str] = {
     "Gene Compl. Single (%)": "gene_compl_single_rating",
     "Gene Compl. Dupl. (%)": "gene_compl_dupl_rating",
     "k-mer QV": "merqury_qv_rating",
-    "k-mer Completeness (%)": "merqury_completeness_rating",
+    "k-mer Compl. (%)": "merqury_completeness_rating",
 }
 
 
@@ -574,7 +574,7 @@ def render_html_heatmap(
         "Generated": generated_at,
         "Species": str(n_species),
         "Assemblies": str(n_assemblies),
-        "Assembly Files": str(n_files),
+        "Files": str(n_files),
     }
 
     meta_html = "".join(
