@@ -164,6 +164,8 @@ Open the report with a markdown renderer, like [VS Code](https://code.visualstud
 GEP2_results/{sp_name}/{asm_id}/{asm_id}_report.md
 ```
 
+Also, check the _super_ report with all the assemblies in `GEP2_results/super_report.html`
+
 ### Directory Structure:
 
 ```
@@ -191,6 +193,7 @@ GEP2_results/
 │           └── {read_type}/
 │               └── {read_file}
 ├── download_manifest.json
+├── super_report.html
 └── {sp_name}/
     └── {asm_id}/
         ├── {asm_id}_report.md
