@@ -27,7 +27,56 @@ import requests
 from urllib.parse import quote
 from pathlib import Path
 
-__version__ = '0.2.0'
+__version__ = '0.3'
+
+# ---- Star-rating calibration -------------------------------------------------
+# Adapts EBP's N50 targets to species with small chromosomes...
+# The idea here is to cap absolute tiers at what chromosome can physically hold.
+# expected_chr_size (E) = genome_size / haploid_number (mean chromosome).
+# CHR_SCALE_FRAC (0.90) estimates chromosome N50 from the mean and keeps
+# karyotype variance in the assembly's favor.
+
+CHR_SCALE_FRAC = 0.90   # '****' bar: Chromosome-scale (EBP "C")
+CHR_HALF_FRAC  = 0.50   # '***-' bar when the absolute tier is out of reach
+CHR_TENTH_FRAC = 0.10   # '**--' bar likewise
+
+# Absolute (uncapped) tiers, as (****, ***-, **--) in bp.
+N50_BASE_TIERS = {
+    'scaffold_n50': (100_000_000, 10_000_000, 100_000),
+    'contig_n50':   ( 10_000_000,  1_000_000, 100_000),
+}
+
+
+def n50_tiers(metric_type, expected_chr_size=None):
+    """Return (****, ***-, **--) bp thresholds for N50 metric.
+    
+    A scaffold cannot exceed a chromosome and a contig cannot exceed a scaffold,
+    so any tier above chromosome scale is unreachable by construction and is
+    pulled down to it...
+
+    If `expected_chr_size` is None or large enough, returns the  default
+    absolute tiers untouched.
+    """
+    t4, t3, t2 = N50_BASE_TIERS[metric_type]
+    if not expected_chr_size:
+        return t4, t3, t2
+    return (min(t4, CHR_SCALE_FRAC * expected_chr_size),
+            min(t3, CHR_HALF_FRAC  * expected_chr_size),
+            min(t2, CHR_TENTH_FRAC * expected_chr_size))
+
+
+def l90_tiers(haploid_number):
+    """Return (****, ***-, **--) L90 thresholds for a haploid number.
+
+    Sets 4-star target at n scaffolds, scaling up for lower tiers. Enforces a 
+    minimum offset at n=1 so 3-star targets remain distinct from 4-star.
+    """
+    if not haploid_number:
+        return None
+    return (haploid_number,
+            max(haploid_number + 1, (haploid_number * 3) // 2),
+            haploid_number * 5)
+
 
 # This is a crap and isn't working yet, will work on it soon...
 def convert_md_to_pdf(md_file, pdf_file=None):
@@ -243,11 +292,19 @@ def parse_gfastats(filepath):
         'gaps': r'# gaps in scaffolds:\s*(\d+)',
         'total_gap_bp': r'Total gap length in scaffolds:\s*(\d+)'
     }
-    
+
+    # Track fields whose regex found nothing: they silently become "N/A" with a
+    # '····' rating in the report, so a gfastats wording change would otherwise
+    # drop metrics without anyone noticing. Reported in the run log instead.
+    missing = []
     for key, pattern in patterns.items():
         match = re.search(pattern, content)
         if match:
             metrics[key] = match.group(1)
+        else:
+            missing.append(key)
+    metrics['_missing'] = missing
+    metrics['_source'] = filepath
     
     # Calculate gaps per Gbp
     if 'total_bp' in metrics and 'gaps' in metrics:
@@ -384,6 +441,13 @@ def parse_compleasm_full(filepath):
     metrics['frameshift_rate'] = frameshift_rate
     metrics['frameshift_is_eukaryota'] = is_eukaryota
     
+    # The report only ever shows the %, these are the numbers are for sanity-check
+    metrics['_lineage_dir'] = lineage
+    metrics['_counts'] = dict(counts)
+    metrics['_n_markers'] = total
+    metrics['_complete_copies'] = total_complete_copies
+    metrics['_frameshifted_copies'] = frameshifted_copies
+
     return metrics
 
 
@@ -609,164 +673,138 @@ def get_rating(value, metric_type, haploid_number=None, expected_chr_size=None):
         return '····'
     
     if metric_type == 'gaps_per_gbp':
-        if value < 200:
+        if value <= 200:
             return '****'
-        elif value < 1000:
+        elif value <= 1000:
             return '***-'
-        elif value < 10000:
+        elif value <= 10000:
             return '**--'
         else:
             return '*---'
     
-    elif metric_type == 'scaffold_n50':
-        # Small-genome carve-out: a scaffold cannot exceed a chromosome, so for
-        # sub-megabase-chromosome species the chromosome-scale bar drops to the
-        # expected chromosome size. Common species (>= 1 Mb or unknown) keep the
-        # original 100M/10M/100k tiers exactly.
-        if expected_chr_size and expected_chr_size < 1_000_000:
-            if value > 10 * expected_chr_size:
-                return '****'
-            elif value > expected_chr_size:
-                return '***-'
-            elif value > expected_chr_size / 10:
-                return '**--'
-            else:
-                return '*---'
-        if value > 100_000_000:
+    elif metric_type in ('scaffold_n50', 'contig_n50'):
+        # Tiers are capped at chromosome scale (EBP "C"); see N50_BASE_TIERS
+        t4, t3, t2 = n50_tiers(metric_type, expected_chr_size)
+        if value >= t4:
             return '****'
-        elif value > 10_000_000:
+        elif value >= t3:
             return '***-'
-        elif value > 100_000:
-            return '**--'
-        else:
-            return '*---'
-    
-    elif metric_type == 'contig_n50':
-        # Small-genome carve-out: a contig cannot exceed a chromosome, so for
-        # sub-megabase-chromosome species the megabase bar (EBP "6") drops to the
-        # expected chromosome size (C.C.Q40). threshold = 1 Mb reproduces the
-        # original 10M/1M/100k tiers exactly for every common species.
-        threshold = 1_000_000
-        if expected_chr_size and expected_chr_size < 1_000_000:
-            threshold = expected_chr_size
-        if value > 10 * threshold:
-            return '****'
-        elif value > threshold:
-            return '***-'
-        elif value > threshold / 10:
+        elif value >= t2:
             return '**--'
         else:
             return '*---'
     
     elif metric_type == 'compl_single':
-        if value > 95:
+        if value >= 95:
             return '****'
-        elif value > 90:
+        elif value >= 90:
             return '***-'
-        elif value > 80:
+        elif value >= 80:
             return '**--'
         else:
             return '*---'
     
     elif metric_type == 'compl_dupl':
-        if value < 2:
+        if value <= 2:
             return '****'
-        elif value < 5:
+        elif value <= 5:
             return '***-'
-        elif value < 7:
+        elif value <= 10:
             return '**--'
         else:
             return '*---'
     
     elif metric_type == 'l90_haploid':
-        if haploid_number is None:
+        tiers = l90_tiers(haploid_number)
+        if tiers is None:
             return '····'
-        if value <= haploid_number:
+        t4, t3, t2 = tiers
+        if value <= t4:
             return '****'
-        elif value <= haploid_number + 100:
+        elif value <= t3:
             return '***-'
-        elif value <= haploid_number + 1000:
+        elif value <= t2:
             return '**--'
         else:
             return '*---'
     
     elif metric_type == 'merqury_qv':
-        if value > 50:
+        if value >= 50:
             return '****'
-        elif value > 40:
+        elif value >= 40:
             return '***-'
-        elif value > 30:
+        elif value >= 30:
             return '**--'
         else:
             return '*---'
     
     elif metric_type == 'merqury_completeness':
-        if value > 95:
+        if value >= 95:
             return '****'
-        elif value > 90:
+        elif value >= 90:
             return '***-'
-        elif value > 80:
+        elif value >= 80:
             return '**--'
         else:
             return '*---'
     
     elif metric_type == 'compl_frameshift':
-        if value < 2:
+        if value <= 2:
             return '****'
-        elif value < 5:
+        elif value <= 5:
             return '***-'
-        elif value < 15:
+        elif value <= 15:
             return '**--'
         else:
             return '*---'
 
     # ---- Hi-C ratings ----
     elif metric_type == 'hic_unique_yield':      # % of input read pairs -> unique output pairs
-        if value > 80:
+        if value >= 80:
             return '****'
-        elif value > 60:
+        elif value >= 60:
             return '***-'
-        elif value > 40:
+        elif value >= 40:
             return '**--'
         else:
             return '*---'
 
     elif metric_type == 'hic_valid_pairs':       # % UU pairs of all pairs
-        if value > 90:
+        if value >= 90:
             return '****'
-        elif value > 80:
+        elif value >= 80:
             return '***-'
-        elif value > 65:
+        elif value >= 65:
             return '**--'
         else:
             return '*---'
 
     elif metric_type == 'hic_cis_trans':         # cis/trans ratio (not a percentage)
-        if value > 4:
+        if value >= 4:
             return '****'
-        elif value > 2:
+        elif value >= 2:
             return '***-'
-        elif value > 1:
+        elif value >= 1:
             return '**--'
         else:
             return '*---'
 
     elif metric_type == 'hic_longrange_cis':     # % long-range cis (frac_cis_10kb+ * 100)
-        if value > 50:
+        if value >= 50:
             return '****'
-        elif value > 40:
+        elif value >= 40:
             return '***-'
-        elif value > 30:
+        elif value >= 30:
             return '**--'
         else:
             return '*---'
 
     elif metric_type == 'hic_verylongrange_cis': # % very-long-range cis (frac_cis_40kb+ * 100)
-        if value > 45:
+        if value >= 45:
             return '****'
-        elif value > 35:
+        elif value >= 35:
             return '***-'
-        elif value > 25:
+        elif value >= 25:
             return '**--'
         else:
             return '*---'
@@ -1486,6 +1524,111 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, bu
     print(f"Report generated successfully: {output_file}")
 
 
+def _fmt_bp(value):
+    """Compact bp for log lines: 8.21 Mb / 912 kb / 430 bp."""
+    if value is None:
+        return "n/a"
+    value = float(value)
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.2f} Mb"
+    if value >= 1_000:
+        return f"{value / 1_000:.0f} kb"
+    return f"{value:.0f} bp"
+
+
+def log_run_diagnostics(goat_data, expected_chr_size, gfastats_list,
+                        compleasm_list, busco_list):
+    """Print everything that shapes the ratings but never appears in the report.
+    """
+    num_assemblies = len(gfastats_list)
+
+    # ---- what GoaT gave us ----
+    level = goat_data.get('resolution_level')
+    if level == 'genus':
+        print(f"[goat]    WARNING: species not found, resolved at GENUS level - "
+              f"haploid number and genome size are genus estimates")
+    print(f"[goat]    taxon_id={goat_data.get('taxon_id')} "
+          f"lineage={goat_data.get('family')} (resolved at {level or 'n/a'} level)")
+    print(f"[goat]    haploid_number={goat_data.get('haploid_number')} "
+          f"(source: {goat_data.get('haploid_source') or 'n/a'})")
+    gs = goat_data.get('genome_size')
+    print(f"[goat]    genome_size={_fmt_bp(gs)} "
+          f"(source: {goat_data.get('genome_size_source') or 'n/a'})")
+
+    # ---- the derived scale and the thresholds it produces ----
+    if expected_chr_size:
+        print(f"[scaling] expected chromosome = genome_size / haploid_number "
+              f"= {_fmt_bp(expected_chr_size)}")
+    else:
+        print("[scaling] WARNING: no expected chromosome size (GoaT genome_size or "
+              "haploid_number missing) - N50 tiers stay at their absolute values "
+              "and may be unreachable for a small genome")
+
+    for mtype, label in (('scaffold_n50', 'scaffold N50'), ('contig_n50', 'contig N50  ')):
+        t4, t3, t2 = n50_tiers(mtype, expected_chr_size)
+        base = N50_BASE_TIERS[mtype]
+        capped = " [capped at chromosome scale]" if (t4, t3, t2) != base else ""
+        print(f"[scaling] {label} tiers: **** >= {_fmt_bp(t4)} | "
+              f"***- >= {_fmt_bp(t3)} | **-- >= {_fmt_bp(t2)}{capped}")
+
+    l90 = l90_tiers(goat_data.get('haploid_number'))
+    if l90:
+        print(f"[scaling] L90 tiers (n={goat_data.get('haploid_number')}): "
+              f"**** <= {l90[0]} | ***- <= {l90[1]} | **-- <= {l90[2]}")
+
+    # ---- per-assembly sanity checks ----
+    for i, g in enumerate(gfastats_list):
+        tag = f"asm{i+1}"
+        total_bp = int(g['total_bp']) if g.get('total_bp') else None
+
+        if g.get('_missing'):
+            print(f"[check]   {tag}: WARNING: gfastats fields not matched "
+                  f"({', '.join(g['_missing'])}) - these show as N/A with a '····' "
+                  f"rating; check the gfastats version/wording in {g.get('_source')}")
+
+        # Assembly size vs GoaT. A large mismatch means the taxon match, the
+        # ploidy, or the assembly itself is off - and expected_chr_size, which
+        # sets the N50 bars, is derived from that same GoaT size.
+        if total_bp and gs:
+            delta = (total_bp - float(gs)) / float(gs) * 100
+            flag = "  <-- WARNING: >30% off, check taxon match / ploidy" if abs(delta) > 30 else ""
+            print(f"[check]   {tag}: assembly {_fmt_bp(total_bp)} vs GoaT genome size "
+                  f"{_fmt_bp(gs)} ({delta:+.1f}%){flag}")
+
+        # Reachability. A tier above the assembly's own total length can never be
+        # awarded, whatever the assembly quality - this check catches
+        # a mis-scaled ladder even when GoaT has no genome size at all.
+        if total_bp:
+            for mtype, label in (('scaffold_n50', 'scaffold N50'), ('contig_n50', 'contig N50')):
+                t4, t3, t2 = n50_tiers(mtype, expected_chr_size)
+                for stars, bar in (('****', t4), ('***-', t3)):
+                    if bar > total_bp:
+                        print(f"[check]   {tag}: WARNING: {label} '{stars}' bar "
+                              f"{_fmt_bp(bar)} exceeds the whole assembly "
+                              f"({_fmt_bp(total_bp)}) - tier unreachable")
+                if expected_chr_size and t4 > expected_chr_size:
+                    print(f"[check]   {tag}: WARNING: {label} '****' bar {_fmt_bp(t4)} "
+                          f"exceeds one chromosome ({_fmt_bp(expected_chr_size)})")
+
+        gaps = g.get('gaps')
+        if gaps is not None:
+            print(f"[{tag}]    gfastats: {g.get('scaffolds', '?')} scaffolds / "
+                  f"{g.get('contigs', '?')} contigs, {gaps} gaps "
+                  f"({_fmt_bp(g.get('total_gap_bp'))} total)")
+
+    # ---- raw counts behind the completeness percentages ----
+    for i, c in enumerate(compleasm_list[:num_assemblies]):
+        if not c or c.get('_counts') is None:
+            continue
+        counts = ", ".join(f"{k}={v}" for k, v in c['_counts'].items() if v)
+        print(f"[asm{i+1}]    compleasm {c.get('_lineage_dir')}: {counts} "
+              f"(n={c.get('_n_markers')})")
+        if c.get('_complete_copies'):
+            print(f"[asm{i+1}]    frameshifts: {c['_frameshifted_copies']}/"
+                  f"{c['_complete_copies']} complete copies "
+                  f"({c.get('frameshift_rate', 0):.2f}%)")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Generate GEP2 genome assembly stats report',
@@ -1596,10 +1739,6 @@ Examples:
                 expected_chr_size = float(genome_size) / haploid_number
             except (TypeError, ValueError):
                 expected_chr_size = None
-        if expected_chr_size is not None and expected_chr_size < 1_000_000:
-            print(f"Note: sub-megabase chromosomes (mean ~{expected_chr_size/1000:.0f} kb); "
-                  f"applying EBP C.C.Q40 contig/scaffold thresholds")
-
         if goat_data['error']:
             print(f"Warning: Could not retrieve all GoaT data: {goat_data['error']}")
         else:
@@ -1696,6 +1835,12 @@ Examples:
             print("Parsing chromap log(s)...")
             for i, cm_file in enumerate(args.chromap_log[:num_assemblies]):
                 chromap_list[i] = parse_chromap_log(cm_file)
+
+        # Everything that shapes the ratings but never reaches the report
+        print("-" * 72)
+        log_run_diagnostics(goat_data, expected_chr_size, gfastats_list,
+                            compleasm_list, busco_list)
+        print("-" * 72)
 
         # Create output directory if needed
         os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
