@@ -778,8 +778,8 @@ rule Z02_generate_super_report:
 
         python {params.script_path} \
             --reports {input.reports} \
-            --output {output.super_report}
-            --format html
+            --output {output.super_report} \
+            --format html \
             --human-readable
 
         echo "[GEP2] Super-report written to {output.super_report}"
