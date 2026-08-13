@@ -52,6 +52,7 @@ RUN_COMPL: on
 LINEAGE: eukaryota
 
 # Use BUSCO instead of COMPLEASM | on / off (default)
+## Caution: compleasm runs with --retrocopy, which prevents intron-less pseudogenes inflating dups
 PREFER_BUSCO: off
 
 
