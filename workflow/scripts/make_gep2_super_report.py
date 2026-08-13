@@ -478,11 +478,11 @@ def render_markdown_table(
 
 
 RATING_COLORS: dict[str, str] = {
-    "****": "#0072b2",  # very very good
-    "***-": "#009e73",  # very good (passes Standards)
-    "**--": "#f0e442",  # medium
-    "*---": "#f8696b",  # not good
-    "····": "#f0f0f0",  # no rating -> neutral
+    "****": "#0072b2bf",  # Way above threshold
+    "***-": "#009e73bf",  # At or above threshold
+    "**--": "#e69f00bf",  # Below threshold
+    "*---": "#cc79a7bf",  # Way below threshold
+    "····": "#f0f0f0bf",  # no rating -> neutral
 }
 
 VALUE_DISPLAY_TO_RATING_COLUMN: dict[str, str] = {
