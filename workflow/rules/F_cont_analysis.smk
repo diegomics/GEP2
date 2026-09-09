@@ -1228,6 +1228,7 @@ rule F05_map_reads_for_blob:
 
                 echo "[GEP2] Merging $PAIR_IDX partial BAMs..."
                 samtools merge \
+                    -f \
                     -@ {threads} \
                     {output.bam} \
                     "${{PARTIAL_BAMS[@]}}"
