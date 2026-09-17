@@ -2,7 +2,7 @@
 
 **Genome Evaluation Pipeline (v2)**
 
-This repository contains a significantly updated version of [GEP](https://git.imp.fu-berlin.de/begendiv/gep) that builds upon lessons learned from [ERGA](https://www.erga-biodiversity.eu/team-1/sac---sequencing-and-assembly-committee) and [GAME](https://github.com/diegomics/GAME).
+This repository contains a significantly updated version of [GEP](https://git.imp.fu-berlin.de/begendiv/gep) that builds upon lessons learned from [ERGA](https://www.erga-biodiversity.eu/team-1/sac---sequencing-and-assembly-committee) and [GAME](https://github.com/diegomics/GAME). This pipeline is being used in the [BGE+](https://biodiversitygenomics.eu) task 5.1 “implementation of a comprehensive framework for benchmarking genome workflows, particularly those producing genome assemblies”.
 
 Data is entered via a simple table, and configuration is managed through a tidy control panel. GEP2 uses a modern [Snakemake](https://snakemake.readthedocs.io) version with [containers](https://apptainer.org) and can run on a server/cluster (SLURM) or a local computer.
 
@@ -248,40 +248,43 @@ GEP2_results/
 
 | tool                                                              | doi                            | version | container                                                    |
 |:----------------------------------------------------------------- |:------------------------------ |:------- |:------------------------------------------------------------ |
-| [bedtools](https://github.com/arq5x/bedtools2)                    | 10.1093/bioinformatics/btq033  | 2.31.1  | docker://diegomics/hic_analysis:0.2                          |
+| [bedtools](https://github.com/arq5x/bedtools2)                    | 10.1093/bioinformatics/btq033  | 2.31.1  | docker://diegomics/hic_analysis:0.2.1                        |
 | [blobtools](https://github.com/genomehubs/blobtoolkit)            | -                              | 4.5.5   | docker://genomehubs/blobtoolkit:4.5.5                        |
-| [bbmap](https://sourceforge.net/projects/bbmap)                   | 10.1371/journal.pone.0185056   | 39.81   | docker://diegomics/gep2_base:0.4                             |
+| [bbmap](https://sourceforge.net/projects/bbmap)                   | 10.1371/journal.pone.0185056   | 39.81   | docker://diegomics/gep2_base:0.4.1                           |
 | [busco](https://gitlab.com/ezlab/busco)                           | 10.1093/molbev/msab199         | 6.1.0   | docker://ezlabgva/busco:v6.1.0_cv1                           |
-| [bwa-mem2](https://github.com/bwa-mem2/bwa-mem2)                  | 10.1109/IPDPS.2019.00041       | 2.3     | docker://diegomics/hic_analysis:0.2                          |
-| [chromap](https://github.com/haowenz/chromap)                     | 10.1038/s41467-021-26865-w     | 0.3.2   | docker://diegomics/hic_analysis:0.2                          |
-| [cooler](https://github.com/open2c/cooler)                        | 10.1093/bioinformatics/btz540  | 0.10.4  | docker://diegomics/hic_analysis:0.2                          |
+| [bwa-mem2](https://github.com/bwa-mem2/bwa-mem2)                  | 10.1109/IPDPS.2019.00041       | 2.3     | docker://diegomics/hic_analysis:0.2.1                        |
+| [chromap](https://github.com/haowenz/chromap)                     | 10.1038/s41467-021-26865-w     | 0.3.2   | docker://diegomics/hic_analysis:0.2.1                        |
+| [cooler](https://github.com/open2c/cooler)                        | 10.1093/bioinformatics/btz540  | 0.10.4  | docker://diegomics/hic_analysis:0.2.1                        |
 | [compleasm](https://github.com/huangnengCSU/compleasm)            | 10.1093/bioinformatics/btad595 | 0.2.8   | docker://huangnengcsu/compleasm:v0.2.8                       |
-| [diamond](https://github.com/bbuchfink/diamond)                   | 10.1038/s41592-021-01101-x     | 2.1.24  | docker://diegomics/hic_analysis:0.2                          |
-| [enabrowsertools](https://github.com/enasequence/enaBrowserTools) | -                              | 1.7.2   | docker://diegomics/gep2_base:0.4                             |
-| [fastp](https://github.com/OpenGene/fastp)                        | 10.1093/bioinformatics/bty560  | 1.3.3   | docker://diegomics/gep2_base:0.4                             |
-| [fastqc](https://github.com/s-andrews/FastQC)                     | -                              | 0.12.1  | docker://diegomics/gep2_base:0.4                             |
+| [diamond](https://github.com/bbuchfink/diamond)                   | 10.1038/s41592-021-01101-x     | 2.1.24  | docker://diegomics/hic_analysis:0.2.1                        |
+| [enabrowsertools](https://github.com/enasequence/enaBrowserTools) | -                              | 1.7.2   | docker://diegomics/gep2_base:0.4.1                           |
+| [fastp](https://github.com/OpenGene/fastp)                        | 10.1093/bioinformatics/bty560  | 1.3.7   | docker://diegomics/gep2_base:0.4.1                           |
+| [fastqc](https://github.com/s-andrews/FastQC)                     | -                              | 0.12.1  | docker://diegomics/gep2_base:0.4.1                           |
 | [fcs-gx](https://github.com/ncbi/fcs-gx)                          | 10.1186/s13059-024-03198-7     | 0.5.5   | databases/fcs-gx.sif                                         |
-| [genomescope2](https://github.com/tbenavi1/genomescope2.0)        | 10.1038/s41467-020-14998-3     | 2.0.1   | docker://diegomics/gep2_base:0.4                             |
-| [gfastats](https://github.com/vgl-hub/gfastats)                   | 10.1093/bioinformatics/btac460 | 1.3.11  | docker://diegomics/gep2_base:0.4                             |
+| [genomescope2](https://github.com/tbenavi1/genomescope2.0)        | 10.1038/s41467-020-14998-3     | 2.0.1   | docker://diegomics/gep2_base:0.4.1                           |
+| [gfastats](https://github.com/vgl-hub/gfastats)                   | 10.1093/bioinformatics/btac460 | 1.3.11  | docker://diegomics/gep2_base:0.4.1                           |
 | [hicexplorer](https://github.com/deeptools/HiCExplorer)           | 10.1093/gigascience/giac061    | 3.7.6   | docker://diegomics/hic_analysis:0.3                          |
-| [hifasm](https://github.com/chhylp123/hifiasm)                    | 10.1038/s41592-024-02269-8     | 0.25.0  | docker://diegomics/gep2_base:0.4                             |
+| [hifasm](https://github.com/chhylp123/hifiasm)                    | 10.1038/s41592-024-02269-8     | 0.25.0  | docker://diegomics/gep2_base:0.4.1                           |
 | [inspector](https://github.com/Maggi-Chen/Inspector)              | 10.1186/s13059-021-02527-4     | 1.3.1   | docker://diegomics/inspector:1.3.1                           |
-| [longdust](https://github.com/lh3/longdust)                       | -                              | 1.4     | docker://diegomics/hic_analysis:0.2                          |
-| [merqury](https://github.com/marbl/merqury)                       | 10.1186/s13059-020-02134-9     | 1.3     | docker://diegomics/gep2_base:0.4                             |
-| [merquryfk](https://github.com/thegenemyers/MERQURY.FK)           | -                              | 1.2     | docker://diegomics/gep2_base:0.4                             |
-| [minimap2](https://github.com/lh3/minimap2)                       | 10.1093/bioinformatics/bty191  | 2.30    | docker://diegomics/hic_analysis:0.2                          |
-| [multiqc](https://github.com/MultiQC/MultiQC)                     | 10.1093/bioinformatics/btw354  | 1.35    | docker://diegomics/gep2_base:0.4                             |
-| [nanoplot](https://github.com/wdecoster/NanoPlot)                 | 10.1093/bioinformatics/btad311 | 1.46.2  | docker://diegomics/gep2_base:0.4                             |
-| [pairtools](https://github.com/open2c/pairtools)                  | 10.1101/2023.02.13.528389      | 1.1.3   | docker://diegomics/hic_analysis:0.2                          |
-| [pretextgraph](https://github.com/sanger-tol/PretextGraph)        | -                              | 0.0.9   | docker://diegomics/hic_analysis:0.2                          |
-| [pretextmap](https://github.com/sanger-tol/PretextMap)            | -                              | 0.2.4   | docker://diegomics/hic_analysis:0.2                          |
-| [pretextsnapshot](https://github.com/sanger-tol/PretextSnapshot)  | -                              | 0.0.6   | docker://diegomics/hic_analysis:0.2                          |
-| [sambamba](https://github.com/biod/sambamba)                      | 10.1093/bioinformatics/btv098  | 1.0.1   | docker://diegomics/hic_analysis:0.2                          |
-| [samtools](https://github.com/samtools/samtools)                  | 10.1093/gigascience/giab008    | 1.22.1  | docker://diegomics/hic_analysis:0.2                          |
-| [sdust](https://github.com/lh3/sdust)                             | -                              | 0.1     | docker://diegomics/hic_analysis:0.2                          |
-| [seqkit](https://github.com/shenwei356/seqkit)                    | 10.1002/imt2.191               | 2.13.0  | docker://diegomics/gep2_base:0.4                             |
-| [seqtk](https://github.com/lh3/seqtk)                             | -                              | 1.5     | docker://diegomics/gep2_base:0.4                             |
-| [tidk](https://github.com/tolkit/telomeric-identifier)            | 10.1093/bioinformatics/btaf049 | 0.2.65  | docker://diegomics/hic_analysis:0.2                          |
+| [longdust](https://github.com/lh3/longdust)                       | -                              | 1.4     | docker://diegomics/hic_analysis:0.2.1                        |
+| [merqury](https://github.com/marbl/merqury)                       | 10.1186/s13059-020-02134-9     | 1.3     | docker://diegomics/gep2_base:0.4.1                           |
+| [merquryfk](https://github.com/thegenemyers/MERQURY.FK)           | -                              | 1.2     | docker://diegomics/gep2_base:0.4.1                           |
+| [minibwa](https://github.com/lh3/minibwa)                         | -                              | 0.7     | docker://diegomics/hic_analysis:0.2.1                        |
+| [minimap2](https://github.com/lh3/minimap2)                       | 10.1093/bioinformatics/bty191  | 2.30    | docker://diegomics/hic_analysis:0.2.1                        |
+| [mosdepth](https://github.com/brentp/mosdepth)                    | 10.1093/bioinformatics/btx699  | 0.3.14  | docker://diegomics/hic_analysis:0.2.1                        |
+| [multiqc](https://github.com/MultiQC/MultiQC)                     | 10.1093/bioinformatics/btw354  | 1.35    | docker://diegomics/gep2_base:0.4.1                           |
+| [nanoplot](https://github.com/wdecoster/NanoPlot)                 | 10.1093/bioinformatics/btad311 | 1.46.2  | docker://diegomics/gep2_base:0.4.1                           |
+| [pairtools](https://github.com/open2c/pairtools)                  | 10.1101/2023.02.13.528389      | 1.1.3   | docker://diegomics/hic_analysis:0.2.1                        |
+| [purge_dups](https://github.com/dfguan/purge_dups)                | 10.1093/bioinformatics/btaa025 | 1.2.6   | docker://diegomics/hic_analysis:0.2.1                        |
+| [pretextgraph](https://github.com/sanger-tol/PretextGraph)        | -                              | 0.0.9   | docker://diegomics/hic_analysis:0.2.1                        |
+| [pretextmap](https://github.com/sanger-tol/PretextMap)            | -                              | 0.2.4   | docker://diegomics/hic_analysis:0.2.1                        |
+| [pretextsnapshot](https://github.com/sanger-tol/PretextSnapshot)  | -                              | 0.0.6   | docker://diegomics/hic_analysis:0.2.1                        |
+| [samtools](https://github.com/samtools/samtools)                  | 10.1093/gigascience/giab008    | 1.24    | docker://diegomics/hic_analysis:0.2.1                        |
+| [sdust](https://github.com/lh3/sdust)                             | -                              | 0.1     | docker://diegomics/hic_analysis:0.2.1                        |
+| [seqkit](https://github.com/shenwei356/seqkit)                    | 10.1002/imt2.191               | 2.13.0  | docker://diegomics/gep2_base:0.4.1                           |
+| [seqtk](https://github.com/lh3/seqtk)                             | -                              | 1.5     | docker://diegomics/gep2_base:0.4.1                           |
+| [tidk](https://github.com/tolkit/telomeric-identifier)            | 10.1093/bioinformatics/btaf049 | 0.2.65  | docker://diegomics/hic_analysis:0.2.1                        |
+| [yahs](https://github.com/c-zhou/yahs)                            | 10.1093/bioinformatics/btac808 | 1.2.2   | docker://diegomics/hic_analysis:0.2.1                        |
 
 
 

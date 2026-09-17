@@ -27,7 +27,7 @@
 
 def get_fcs_gx_asm_inputs(wildcards):
     """Get resolved assembly file paths for FCS-GX screening.
-    
+
     Handles local paths, NCBI accessions, and URLs by resolving to
     actual file locations (including downloaded paths).
     Returns a sorted list of paths.
@@ -179,31 +179,31 @@ def _get_blob_read_files(species, asm_id, target_read_type):
                         else:
                             read_path_1 = os.path.join(base_dir, f"{target_read_type}_Path{idx}_{base}_1.fq.gz")
                             read_path_2 = os.path.join(base_dir, f"{target_read_type}_Path{idx}_{base}_2.fq.gz")
-                            
+
                         # Only append if we haven't added this pair yet
                         if read_path_1 not in files:
                             files.extend([read_path_1, read_path_2])
-                            
+
                     elif target_read_type == "hifi":
                         use_proc = reads_proc and _as_bool(config.get("FILTER_HIFI", True))
                         if use_proc:
                             read_path = os.path.join(base_dir, "processed", f"hifi_Path{idx}_{base}_filtered.fq.gz")
                         else:
                             read_path = os.path.join(base_dir, f"hifi_Path{idx}_{base}.fq.gz")
-                            
+
                         if read_path not in files:
                             files.append(read_path)
-                            
+
                     elif target_read_type == "ont":
                         use_proc = reads_proc and _as_bool(config.get("CORRECT_ONT", False))
                         if use_proc:
                             read_path = os.path.join(base_dir, "processed", f"ont_Path{idx}_{base}_corrected.fq.gz")
                         else:
                             read_path = os.path.join(base_dir, f"ont_Path{idx}_{base}.fq.gz")
-                            
+
                         if read_path not in files:
                             files.append(read_path)
-                            
+
                     else:
                         read_path = os.path.join(base_dir, f"{target_read_type}_Path{idx}_{base}.fq.gz")
                         if read_path not in files:
@@ -359,13 +359,13 @@ WRAPPER
 
 rule F01_run_fcs_gx:
     """Run FCS-GX contamination screening for all assemblies of an asm_id.
-    
+
     This rule:
     1. Copies the FCS-GX database to RAM (FAST_TEMP_DIR) for performance
     2. Resolves the species tax-id via the GoaT API
     3. Screens each assembly file (1 or 2 per asm_id)
     4. Cleans up RAM copy
-    
+
     Requires 512 GB RAM. Runs without container directive because fcs.py
     manages its own container via apptainer/singularity.
     """
@@ -1181,17 +1181,25 @@ rule F05_map_reads_for_blob:
         elif [ "$READ_TYPE" = "illumina" ] || [ "$READ_TYPE" = "10x" ] || [ "$READ_TYPE" = "hic" ]; then
             # Short/paired reads
             # Multiple read pairs: map each pair, then merge sorted BAMs
-            echo "[GEP2] Paired-read mapping: minimap2 -ax {params.preset}"
+            echo "[GEP2] Paired-read mapping: minibwa map"
+
+            # Build the minibwa index in TEMP_DIR (removed by the EXIT trap).
+            # Needs ~18x genome size in RAM.
+            echo "[GEP2] Building minibwa index..."
+            minibwa index -t {threads} {input.asm} "$TEMP_DIR/asm_idx"
+
+            # minibwa reports secondary hits in the XA tag (bwa-mem style) rather
+            # than as separate 0x100 records, so the -F 0x100 below is expected to
+            # be a no-op. It is kept as a guard: blobtools coverage must never be
+            # inflated by secondary records if that default ever changes.
 
             if [ "$NUM_READS" -eq 2 ]; then
                 # Single pair - pipe directly
-                minimap2 -ax {params.preset} \
+                minibwa map \
                     -t $MAP_THREADS \
-                    --secondary=no \
-                    -Q \
-                    {input.asm} \
+                    "$TEMP_DIR/asm_idx" \
                     "${{ALL_READS[0]}}" "${{ALL_READS[1]}}" \
-                | samtools view -bu -@ $VIEW_THREADS \
+                | samtools view -bu -F 0x100 -@ $VIEW_THREADS \
                 | samtools sort \
                     -@ $SORT_THREADS \
                     -m $(( {resources.mem_mb} * 60 / 100 / SORT_THREADS ))M \
@@ -1209,13 +1217,11 @@ rule F05_map_reads_for_blob:
                     PARTIAL_BAM="$TEMP_DIR/partial_${{PAIR_IDX}}.bam"
                     echo "[GEP2] Mapping pair $PAIR_IDX: ${{ALL_READS[$i]}} + ${{ALL_READS[$((i+1))]}}"
 
-                    minimap2 -ax {params.preset} \
+                    minibwa map \
                         -t $MAP_THREADS \
-                        --secondary=no \
-                        -Q \
-                        {input.asm} \
+                        "$TEMP_DIR/asm_idx" \
                         "${{ALL_READS[$i]}}" "${{ALL_READS[$((i+1))]}}" \
-                    | samtools view -bu -@ $VIEW_THREADS \
+                    | samtools view -bu -F 0x100 -@ $VIEW_THREADS \
                     | samtools sort \
                         -@ $SORT_THREADS \
                         -m $(( {resources.mem_mb} * 60 / 100 / SORT_THREADS ))M \
@@ -1227,8 +1233,9 @@ rule F05_map_reads_for_blob:
                 done
 
                 echo "[GEP2] Merging $PAIR_IDX partial BAMs..."
-                sambamba merge \
-                    -t {threads} \
+                samtools merge \
+                    -f \
+                    -@ {threads} \
                     {output.bam} \
                     "${{PARTIAL_BAMS[@]}}"
 
@@ -1251,13 +1258,13 @@ rule F05_map_reads_for_blob:
         echo "[GEP2] BAM size: $((BAM_SIZE / 1024 / 1024)) MB"
 
         # Quick validation: check BAM header
-        if ! sambamba view -H {output.bam} > /dev/null 2>&1; then
+        if ! samtools view -H {output.bam} > /dev/null 2>&1; then
             echo "[GEP2] ERROR: Output BAM file is not valid" >&2
             exit 1
         fi
 
         # Count mapped reads
-        MAPPED=$(sambamba flagstat -t {threads} {output.bam} 2>/dev/null | head -1 | awk '{{print $1}}')
+        MAPPED=$(samtools flagstat -@ {threads} {output.bam} 2>/dev/null | head -1 | awk '{{print $1}}')
         echo "[GEP2] Total alignments: $MAPPED"
 
         echo "[GEP2] Read mapping complete: {output.bam}"
@@ -1378,7 +1385,7 @@ print(records)
         # Step 3: Add read coverage from BAM
         echo ""
         echo "[GEP2] Step 3/3: blobtools add --cov (read coverage)"
-        
+
         # Re-index BAM as CSI (blobtools prefers .csi over .bai)
         echo "[GEP2] Indexing BAM..."
         samtools index -c {input.bam}

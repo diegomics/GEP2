@@ -192,7 +192,11 @@ def _get_nanoplot_input(w):
         "reads", w.read_type
     )
     
-    if "_filtered" in w.filename or "_corrected" in w.filename:
+    # Anchored, not a substring search: a library legitimately named
+    # e.g. "run_filtered_2019" contains "_filtered" but is a raw read set,
+    # and would otherwise be looked for under processed/ and never found.
+    # Processed long reads are always named "<base>_filtered" / "<base>_corrected".
+    if w.filename.endswith(("_filtered", "_corrected")):
         return os.path.join(base_dir, "processed", f"{w.filename}.fq.gz")
     else:
         return os.path.join(base_dir, f"{w.filename}.fq.gz")

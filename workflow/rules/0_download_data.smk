@@ -87,27 +87,27 @@ for item in manifest:
         sys.exit(0)
 sys.exit(0)
 ")
-        
+
         if [ -z "$MANIFEST_INFO" ]; then
             echo "[GEP2] Error: No manifest entry found for {output.asm}"
             exit 1
         fi
-        
+
         SOURCE=$(echo "$MANIFEST_INFO" | sed -n '1p')
         METHOD=$(echo "$MANIFEST_INFO" | sed -n '2p')
-        
+
         mkdir -p $(dirname {output.asm})
-        
+
         if [ "$METHOD" = "curl" ]; then
             echo "[GEP2] Downloading assembly from URL: $SOURCE"
             curl -L -C - --retry 3 --retry-delay 5 -o {output.asm}.tmp "$SOURCE"
-            
+
             # Validate download
             if [ ! -s {output.asm}.tmp ]; then
                 echo "[GEP2] Error: Downloaded file is empty"
                 exit 1
             fi
-            
+
             # Check minimum file size (10KB for assemblies)
             FILE_SIZE=$(stat -c%s "{output.asm}.tmp" 2>/dev/null || echo "0")
             if [ "$FILE_SIZE" -lt 10240 ]; then
@@ -115,7 +115,7 @@ sys.exit(0)
                 rm -f {output.asm}.tmp
                 exit 1
             fi
-            
+
             # Validate gzip integrity if compressed
             if [[ "{output.asm}" == *.gz ]]; then
                 echo "[GEP2] Validating gzip integrity..."
@@ -125,13 +125,13 @@ sys.exit(0)
                     exit 1
                 fi
             fi
-            
+
             mv {output.asm}.tmp {output.asm}
             echo "[GEP2] Downloaded: {output.asm}"
-            
+
         elif [ "$METHOD" = "ncbi_assembly" ]; then
             echo "[GEP2] Downloading NCBI assembly: $SOURCE"
-            
+
             # Parse accession using bash regex (e.g., GCA_963854735.1)
             if [[ $SOURCE =~ ^(GC[AF])_([0-9]{{3}})([0-9]{{3}})([0-9]{{3}})\\.([0-9]+)$ ]]; then
                 PREFIX=${{BASH_REMATCH[1]}}
@@ -143,31 +143,31 @@ sys.exit(0)
                 echo "[GEP2] Error: Invalid NCBI accession format: $SOURCE"
                 exit 1
             fi
-            
+
             # Build base FTP directory URL
             BASE_URL="https://ftp.ncbi.nlm.nih.gov/genomes/all/${{PREFIX}}/${{P1}}/${{P2}}/${{P3}}"
             echo "[GEP2] Looking in: $BASE_URL"
-            
+
             # Find the assembly directory (contains accession + assembly name)
             ASM_DIR=$(curl -sL "$BASE_URL/" | grep -oP "href=\\"${{SOURCE}}_[^/\\"]+" | head -1 | sed 's/href="//')
-            
+
             if [ -z "$ASM_DIR" ]; then
                 echo "[GEP2] Error: Could not find assembly directory for $SOURCE"
                 exit 1
             fi
-            
+
             # Construct full URL to genomic.fna.gz
             FULL_URL="${{BASE_URL}}/${{ASM_DIR}}/${{ASM_DIR}}_genomic.fna.gz"
             echo "[GEP2] Downloading from: $FULL_URL"
-            
+
             curl -L -C - --retry 5 --retry-delay 10 -o {output.asm}.tmp "$FULL_URL"
-            
+
             # Validate download
             if [ ! -s {output.asm}.tmp ]; then
                 echo "[GEP2] Error: Downloaded file is empty"
                 exit 1
             fi
-            
+
             # Check minimum file size
             FILE_SIZE=$(stat -c%s "{output.asm}.tmp" 2>/dev/null || echo "0")
             if [ "$FILE_SIZE" -lt 10240 ]; then
@@ -175,7 +175,7 @@ sys.exit(0)
                 rm -f {output.asm}.tmp
                 exit 1
             fi
-            
+
             # Validate gzip file
             echo "[GEP2] Validating gzip integrity..."
             if ! gzip -t {output.asm}.tmp 2>/dev/null; then
@@ -183,7 +183,7 @@ sys.exit(0)
                 rm -f {output.asm}.tmp
                 exit 1
             fi
-            
+
             mv {output.asm}.tmp {output.asm}
             echo "[GEP2] Downloaded NCBI assembly: {output.asm}"
         else
@@ -215,8 +215,8 @@ with open('{params.manifest}') as f:
     manifest = json.load(f)
 found = False
 for item in manifest:
-    if (item.get('type') == 'reads' and 
-        item.get('method') == 'enaDataGet' and 
+    if (item.get('type') == 'reads' and
+        item.get('method') == 'enaDataGet' and
         item.get('source') == '{wildcards.acc}'):
         if not item.get('paired', False):
             found = True
@@ -225,27 +225,66 @@ if not found:
     print('[GEP2] Error: Accession {wildcards.acc} not found in manifest as single-end reads')
     sys.exit(1)
 "
-        
+
         source {params.watchdog}
-        
+
         # CHECK IF DOWNLOAD PRODUCED FILES
         # -------------------------------------------------------------------
+        # Note for the integrity check below. set -euo pipefail is active
+        # (shell.prefix), so this MUST be initialised before first use or -u aborts.
+        VERIFIED_SIG=""
+
+        # Same integrity check as gzip -t (CRC32 + ISIZE over the whole stream),
+        # but pigz pipelines read/inflate/check across threads.
+        # stderr is deliberately NOT suppressed: it says WHY a file failed -
+        # "unexpected end of file" for a truncated download, "invalid compressed
+        # data" for corruption. $2 = pigz threads; inflate itself is serial, so
+        # extra threads only help the read/write/check pipeline.
+        gz_test() {{
+            pigz -t -p "${{2:-1}}" "$1"
+        }}
+
+        # Memoised on (size, mtime, inode): this is called as a gate before every
+        # fallback and again at the end, so without it a valid file is fully
+        # decompressed once per call. A re-download changes all three fields and a
+        # delete makes stat emit nothing, so the memo cannot go stale.
+        gz_test_one() {{
+            local f=$1 sig
+            sig=$( (stat -c '%s:%Y:%i' "$f" 2>/dev/null || true) )
+            if [ -n "$sig" ] && [ "$sig" = "$VERIFIED_SIG" ]; then
+                return 0
+            fi
+            if gz_test "$f" {threads}; then
+                VERIFIED_SIG="$sig"
+                return 0
+            fi
+            return 1
+        }}
+
         check_single_files() {{
             local ACC=$1
             local DIR="."
             [ -d "$ACC" ] && DIR="$ACC"
             local SIZE
-            
+
+            # An aria2c control file means the transfer never finished, whatever
+            # the data file looks like on disk. Never accept a download in that
+            # state. Checked first, so it also skips a slow gzip -t on a huge
+            # partial file.
+            if ls "$DIR/${{ACC}}"*.aria2 >/dev/null 2>&1; then
+                return 1
+            fi
+
             # Compressed: must be >= 1 KB AND pass gzip integrity
             for f in "$DIR/${{ACC}}.fastq.gz" "$DIR/${{ACC}}_1.fastq.gz"; do
                 if [ -f "$f" ]; then
                     SIZE=$(stat -c%s "$f" 2>/dev/null || echo "0")
-                    if [ "$SIZE" -ge 1024 ] && gzip -t "$f" 2>/dev/null; then
+                    if [ "$SIZE" -ge 1024 ] && gz_test_one "$f"; then
                         return 0
                     fi
                 fi
             done
-            
+
             # Uncompressed: must be >= 1 KB (gzip check N/A)
             for f in "$DIR/${{ACC}}.fastq" "$DIR/${{ACC}}_1.fastq"; do
                 if [ -f "$f" ]; then
@@ -255,30 +294,59 @@ if not found:
                     fi
                 fi
             done
-            
+
             return 1
         }}
 
         # MAIN DOWNLOAD LOGIC
         # -------------------------------------------------------------------
         echo "[GEP2] Downloading single-end/long reads: {wildcards.acc}"
-        
+
         mkdir -p {params.outdir}
         cd {params.outdir}
-        
+
         MAX_RETRIES=3
         RETRY_DELAY=60
         USE_ARIA2=true  # Start with aria2c, switch to enaDataGet HTTP if it fails
-        
+
+        # Between attempts, keep ONLY a partial that aria2c can provably resume.
+        # aria2c writes a .aria2 control file recording which byte ranges are
+        # already on disk; while that file exists the transfer is by definition
+        # unfinished, and with it "aria2c -c" continues correctly. A data file
+        # WITHOUT its control file is not provably a valid prefix - it may come
+        # from another method, or be a truncated write - so it is deleted rather
+        # than resumed. Returns 0 when something resumable was kept.
+        keep_only_resumable() {{
+            local ACC=$1
+            local f kept=0
+            rm -rf "$ACC/" 2>/dev/null || true
+            for f in "$ACC".fastq.gz "$ACC".fastq "$ACC"_*.fastq.gz "$ACC"_*.fastq; do
+                [ -e "$f" ] || continue
+                if [ -f "$f.aria2" ]; then
+                    echo "[GEP2] Keeping resumable partial: $f ($(stat -c%s "$f" 2>/dev/null || echo 0) bytes so far)"
+                    kept=1
+                else
+                    rm -f "$f" 2>/dev/null || true
+                fi
+            done
+            return $((1 - kept))
+        }}
+
         for ATTEMPT in $(seq 1 $MAX_RETRIES); do
             echo ""
             echo "[GEP2] ------------------------------------------------------------"
             echo "[GEP2] Download attempt $ATTEMPT of $MAX_RETRIES"
             echo "[GEP2] ------------------------------------------------------------"
-            
-            # Clean slate for this attempt
-            rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
-            
+
+            # Clean slate for this attempt, except for a resumable aria2c
+            # partial: a 30+ GB transfer that keeps dropping should accumulate
+            # progress instead of restarting from zero every time. aria2c is the
+            # only resumable method here, so go back to it whenever one survived.
+            if keep_only_resumable {wildcards.acc}; then
+                echo "[GEP2] Resumable partial present - using aria2c to continue"
+                USE_ARIA2=true
+            fi
+
             # TRY ARIA2C FAST DOWNLOAD (parallel HTTPS via ENA portal API)
             # -----------------------------------------------------------------
             if [ "$USE_ARIA2" = "true" ]; then
@@ -329,31 +397,31 @@ if not found:
 
                 echo "[GEP2] enaDataGet HTTP finished (exit code: $HTTP_EXIT)"
             fi
-            
+
             # TRY SUBMITTED FORMAT (if fastq format produced nothing)
             # -----------------------------------------------------------------
             if ! check_single_files {wildcards.acc}; then
                 echo "[GEP2] No FASTQ files found, trying submitted format..."
                 rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
-                
+
                 SUBMITTED_EXIT=0
                 gep2_download_with_timeout 14400 enaDataGet.py -f submitted -d . {wildcards.acc} || SUBMITTED_EXIT=$?
-                
+
                 echo "[GEP2] Submitted files download finished (exit code: $SUBMITTED_EXIT)"
-                
+
                 # Rename unpredictable submitted file to standard naming
                 DIR="."
                 [ -d "{wildcards.acc}" ] && DIR="{wildcards.acc}"
-                
+
                 SUBMITTED=$(find "$DIR" -maxdepth 1 '(' -name "*.fastq.gz" -o -name "*.fq.gz" -o -name "*.fastq" -o -name "*.fq" ')' 2>/dev/null | sort | head -1)
-                
+
                 if [ -n "$SUBMITTED" ]; then
                     if [[ "$SUBMITTED" == *.gz ]]; then
                         TARGET="$DIR/{wildcards.acc}.fastq.gz"
                     else
                         TARGET="$DIR/{wildcards.acc}.fastq"
                     fi
-                    
+
                     echo "[GEP2] Renaming submitted file to standard naming..."
                     echo "[GEP2]   $SUBMITTED -> $TARGET"
                     mv "$SUBMITTED" "$TARGET"
@@ -369,10 +437,10 @@ if not found:
             if ! check_single_files {wildcards.acc}; then
                 echo "[GEP2] Trying ENA portal API + HTTPS as last resort..."
                 rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
-                
+
                 API_EXIT=0
                 gep2_ena_download_single {wildcards.acc} || API_EXIT=$?
-                
+
                 if [ "$API_EXIT" -eq 0 ] && check_single_files {wildcards.acc}; then
                     echo "[GEP2] Portal-API download produced files"
                 else
@@ -382,7 +450,7 @@ if not found:
 
             # PROCESS AND VALIDATE FILES
             # -----------------------------------------------------------------
-            
+
             # Move files from subdirectory if created
             if [ -d "{wildcards.acc}" ]; then
                 echo "[GEP2] Moving files from subdirectory..."
@@ -397,7 +465,7 @@ if not found:
                     pigz -p {threads} "$f"
                 fi
             done
-            
+
             # Rename variant files (_1, _subreads, etc.) to standard name
             for f in {wildcards.acc}_*.fastq.gz; do
                 if [ -f "$f" ] && [ "$f" != "{wildcards.acc}.fastq.gz" ]; then
@@ -412,22 +480,22 @@ if not found:
                 echo "[GEP2] Compressing..."
                 pigz -p {threads} "{wildcards.acc}.fastq"
             fi
-            
+
             # Clean up any unexpected _2 file (shouldn't exist for single-end)
             rm -f "{wildcards.acc}_2.fastq.gz" "{wildcards.acc}_2.fastq" 2>/dev/null || true
-            
+
             # Check if we got the file
             if [ -f "{output.reads}" ]; then
                 echo "[GEP2] Validating downloaded file..."
-                
+
                 FILE_SIZE=$(stat -c%s "{output.reads}" 2>/dev/null || echo "0")
-                
+
                 echo "[GEP2] File size: $FILE_SIZE bytes"
-                
+
                 if [ "$FILE_SIZE" -lt 1024 ]; then
                     echo "[GEP2] Downloaded file is suspiciously small"
                 else
-                    if gzip -t "{output.reads}" 2>/dev/null; then
+                    if gz_test_one "{output.reads}"; then
                         echo "[GEP2] Downloaded and validated: {wildcards.acc}"
                         exit 0
                     else
@@ -440,7 +508,7 @@ if not found:
                 echo "[GEP2] Directory contents:"
                 ls -la {params.outdir}/ 2>/dev/null || echo "(empty)"
             fi
-            
+
             # RETRY LOGIC
             # -----------------------------------------------------------------
             if [ $ATTEMPT -lt $MAX_RETRIES ]; then
@@ -451,7 +519,7 @@ if not found:
                 rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
             fi
         done
-        
+
         # All retries exhausted
         echo ""
         echo "[GEP2] ------------------------------------------------------------"
@@ -496,8 +564,8 @@ with open('{params.manifest}') as f:
     manifest = json.load(f)
 found = False
 for item in manifest:
-    if (item.get('type') == 'reads' and 
-        item.get('method') == 'enaDataGet' and 
+    if (item.get('type') == 'reads' and
+        item.get('method') == 'enaDataGet' and
         item.get('paired') == True and
         item.get('source') == '{wildcards.acc}'):
         found = True
@@ -506,28 +574,73 @@ if not found:
     print('[GEP2] Error: Accession {wildcards.acc} not found in manifest as paired-end reads')
     sys.exit(1)
 "
-        
+
         source {params.watchdog}
 
         # CHECK IF DOWNLOAD PRODUCED PAIRED FILES
         # -------------------------------------------------------------------
+        # Memo for the integrity check below. set -euo pipefail is active
+        # (shell.prefix), so this MUST be initialised before first use or -u aborts.
+        VERIFIED_SIG=""
+
+        # Same integrity check as gzip -t (CRC32 + ISIZE over the whole stream),
+        # but pigz pipelines read/inflate/check across threads. pigz is a hard
+        # dependency of this pipeline (called unconditionally here and in B_ and D_),
+        # so there is no gzip fallback to keep in sync.
+        # stderr is deliberately NOT suppressed: it says WHY a file failed -
+        # "unexpected end of file" for a truncated download, "invalid compressed
+        # data" for corruption. $2 = pigz threads; inflate itself is serial, so
+        # extra threads only help the read/write/check pipeline.
+        gz_test() {{
+            pigz -t -p "${{2:-1}}" "$1"
+        }}
+
+        # Both mates tested concurrently
+        # Memoised on (size, mtime, inode): this is called as a gate before every
+        # fallback and again at the end, so without it a valid file is fully
+        # decompressed once per call. A re-download changes all three fields and a
+        # delete makes stat emit nothing, so the memo cannot go stale.
+        gz_test_pair() {{
+            local f1=$1 f2=$2 p1 p2 r1=0 r2=0 sig
+            sig=$( (stat -c '%s:%Y:%i' "$f1" "$f2" 2>/dev/null || true) | tr '\n' ' ')
+            if [ -n "$sig" ] && [ "$sig" = "$VERIFIED_SIG" ]; then
+                return 0
+            fi
+            gz_test "$f1" 1 & p1=$!
+            gz_test "$f2" 1 & p2=$!
+            wait $p1 || r1=$?
+            wait $p2 || r2=$?
+            if [ "$r1" -eq 0 ] && [ "$r2" -eq 0 ]; then
+                VERIFIED_SIG="$sig"
+                return 0
+            fi
+            return 1
+        }}
+
         check_paired_files() {{
             local ACC=$1
             local DIR="."
             [ -d "$ACC" ] && DIR="$ACC"
             local SIZE1 SIZE2
-            
+
+            # An aria2c control file means the transfer never finished, whatever
+            # the data file looks like on disk. Never accept a download in that
+            # state. Checked first, so it also skips a slow gzip -t on a huge
+            # partial file.
+            if ls "$DIR/${{ACC}}"*.aria2 >/dev/null 2>&1; then
+                return 1
+            fi
+
             # Both R1 and R2 must exist and be valid
             if [ -f "$DIR/${{ACC}}_1.fastq.gz" ] && [ -f "$DIR/${{ACC}}_2.fastq.gz" ]; then
                 SIZE1=$(stat -c%s "$DIR/${{ACC}}_1.fastq.gz" 2>/dev/null || echo "0")
                 SIZE2=$(stat -c%s "$DIR/${{ACC}}_2.fastq.gz" 2>/dev/null || echo "0")
                 if [ "$SIZE1" -ge 1024 ] && [ "$SIZE2" -ge 1024 ] && \
-                gzip -t "$DIR/${{ACC}}_1.fastq.gz" 2>/dev/null && \
-                gzip -t "$DIR/${{ACC}}_2.fastq.gz" 2>/dev/null; then
+                gz_test_pair "$DIR/${{ACC}}_1.fastq.gz" "$DIR/${{ACC}}_2.fastq.gz"; then
                     return 0
                 fi
             fi
-            
+
             if [ -f "$DIR/${{ACC}}_1.fastq" ] && [ -f "$DIR/${{ACC}}_2.fastq" ]; then
                 SIZE1=$(stat -c%s "$DIR/${{ACC}}_1.fastq" 2>/dev/null || echo "0")
                 SIZE2=$(stat -c%s "$DIR/${{ACC}}_2.fastq" 2>/dev/null || echo "0")
@@ -535,31 +648,60 @@ if not found:
                     return 0
                 fi
             fi
-            
+
             return 1
         }}
 
-        
+
         # MAIN DOWNLOAD LOGIC
         # -------------------------------------------------------------------
         echo "[GEP2] Downloading paired-end reads: {wildcards.acc}"
-        
+
         mkdir -p {params.outdir}
         cd {params.outdir}
-        
+
         MAX_RETRIES=3
         RETRY_DELAY=60
         USE_ARIA2=true  # Start with aria2c, switch to enaDataGet HTTP if it fails
-        
+
+        # Between attempts, keep ONLY a partial that aria2c can resume.
+        # aria2c writes a .aria2 control file recording which byte ranges are
+        # already on disk; while that file exists the transfer is by definition
+        # unfinished, and with it "aria2c -c" continues correctly. A data file
+        # WITHOUT its control file is not a valid prefix - it may come
+        # from another method, or be a truncated write - so it is deleted rather
+        # than resumed. Returns 0 when something resumable was kept.
+        keep_only_resumable() {{
+            local ACC=$1
+            local f kept=0
+            rm -rf "$ACC/" 2>/dev/null || true
+            for f in "$ACC".fastq.gz "$ACC".fastq "$ACC"_*.fastq.gz "$ACC"_*.fastq; do
+                [ -e "$f" ] || continue
+                if [ -f "$f.aria2" ]; then
+                    echo "[GEP2] Keeping resumable partial: $f ($(stat -c%s "$f" 2>/dev/null || echo 0) bytes so far)"
+                    kept=1
+                else
+                    rm -f "$f" 2>/dev/null || true
+                fi
+            done
+            return $((1 - kept))
+        }}
+
         for ATTEMPT in $(seq 1 $MAX_RETRIES); do
             echo ""
             echo "[GEP2] ------------------------------------------------------------"
             echo "[GEP2] Download attempt $ATTEMPT of $MAX_RETRIES"
             echo "[GEP2] ------------------------------------------------------------"
-            
-            # Clean slate for this attempt
-            rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
-            
+
+            # Clean slate for this attempt, except for a resumable aria2c
+            # partial: a 30+ GB transfer that keeps dropping should accumulate
+            # progress instead of restarting from zero every time. aria2c is the
+            # only resumable method here, so go back to it whenever one survived.
+            if keep_only_resumable {wildcards.acc}; then
+                echo "[GEP2] Resumable partial present - using aria2c to continue"
+                USE_ARIA2=true
+            fi
+
             # TRY ARIA2C FAST DOWNLOAD (parallel HTTPS via ENA portal API)
             # -----------------------------------------------------------------
             if [ "$USE_ARIA2" = "true" ]; then
@@ -616,29 +758,29 @@ if not found:
 
                 echo "[GEP2] enaDataGet HTTP finished (exit code: $HTTP_EXIT)"
             fi
-            
+
             # TRY SUBMITTED FORMAT (if fastq format produced nothing)
             # -----------------------------------------------------------------
             if ! check_paired_files {wildcards.acc}; then
                 echo "[GEP2] No FASTQ files found, trying submitted format..."
                 rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
-                
+
                 SUBMITTED_EXIT=0
                 gep2_download_with_timeout 14400 enaDataGet.py -f submitted -d . {wildcards.acc} || SUBMITTED_EXIT=$?
-                
+
                 echo "[GEP2] Submitted files download finished (exit code: $SUBMITTED_EXIT)"
 
                 # Rename unpredictable submitted files to standard naming
                 DIR="."
                 [ -d "{wildcards.acc}" ] && DIR="{wildcards.acc}"
-                
+
                 FASTQ_FILES=$(find "$DIR" -maxdepth 1 '(' -name "*.fastq.gz" -o -name "*.fq.gz" -o -name "*.fastq" -o -name "*.fq" ')' 2>/dev/null | sort)
                 NUM_FILES=$(echo "$FASTQ_FILES" | grep -c . || true)
-                
+
                 if [ "$NUM_FILES" -ge 2 ]; then
                     R1=$(echo "$FASTQ_FILES" | sed -n '1p')
                     R2=$(echo "$FASTQ_FILES" | sed -n '2p')
-                    
+
                     # Detect extension to avoid renaming .fastq as .fastq.gz
                     EXT1="${{R1##*.fastq}}"
                     if [[ "$R1" == *.gz ]]; then
@@ -648,7 +790,7 @@ if not found:
                         TARGET_R1="$DIR/{wildcards.acc}_1.fastq"
                         TARGET_R2="$DIR/{wildcards.acc}_2.fastq"
                     fi
-                    
+
                     echo "[GEP2] Renaming submitted files to standard naming..."
                     echo "[GEP2]   $R1 -> $TARGET_R1"
                     echo "[GEP2]   $R2 -> $TARGET_R2"
@@ -668,10 +810,10 @@ if not found:
             if ! check_paired_files {wildcards.acc}; then
                 echo "[GEP2] Trying ENA portal API + HTTPS as last resort..."
                 rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
-                
+
                 API_EXIT=0
                 gep2_ena_download_paired {wildcards.acc} || API_EXIT=$?
-                
+
                 if [ "$API_EXIT" -eq 0 ] && check_paired_files {wildcards.acc}; then
                     echo "[GEP2] Portal-API download produced files"
                 else
@@ -688,7 +830,7 @@ if not found:
                 mv {wildcards.acc}/* . 2>/dev/null || true
                 rmdir {wildcards.acc} 2>/dev/null || true
             fi
-            
+
             # Compress if needed
             if [ -f "{wildcards.acc}_1.fastq" ]; then
                 echo "[GEP2] Compressing R1..."
@@ -698,20 +840,20 @@ if not found:
                 echo "[GEP2] Compressing R2..."
                 pigz -p {threads} "{wildcards.acc}_2.fastq"
             fi
-            
+
             # Check if we got both files
             if [ -f "{output.r1}" ] && [ -f "{output.r2}" ]; then
                 echo "[GEP2] Validating downloaded files..."
-                
+
                 R1_SIZE=$(stat -c%s "{output.r1}" 2>/dev/null || echo "0")
                 R2_SIZE=$(stat -c%s "{output.r2}" 2>/dev/null || echo "0")
-                
+
                 echo "[GEP2] File sizes: R1=$R1_SIZE bytes, R2=$R2_SIZE bytes"
-                
+
                 if [ "$R1_SIZE" -lt 1024 ] || [ "$R2_SIZE" -lt 1024 ]; then
                     echo "[GEP2] Downloaded files are suspiciously small"
                 else
-                    if gzip -t "{output.r1}" 2>/dev/null && gzip -t "{output.r2}" 2>/dev/null; then
+                    if gz_test_pair "{output.r1}" "{output.r2}"; then
                         echo "[GEP2] Downloaded and validated paired reads: {wildcards.acc}"
                         exit 0
                     else
@@ -725,7 +867,7 @@ if not found:
                 echo "[GEP2] Directory contents:"
                 ls -la {params.outdir}/ 2>/dev/null || echo "(empty)"
             fi
-            
+
             # RETRY LOGIC
             # -----------------------------------------------------------------
             if [ $ATTEMPT -lt $MAX_RETRIES ]; then
@@ -736,7 +878,7 @@ if not found:
                 rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
             fi
         done
-        
+
         # All retries exhausted
         echo ""
         echo "[GEP2] ------------------------------------------------------------"
@@ -784,23 +926,23 @@ for item in manifest:
 print('')
 sys.exit(0)
 ")
-        
+
         if [ -z "$SOURCE" ]; then
             echo "[GEP2] Error: No URL source found in manifest for {output.reads}"
             exit 1
         fi
-        
+
         mkdir -p $(dirname {output.reads})
-        
+
         echo "[GEP2] Downloading reads from URL: $SOURCE"
         curl -L -C - --retry 3 --retry-delay 5 -o {output.reads}.tmp "$SOURCE"
-        
+
         # Validate download
         if [ ! -s {output.reads}.tmp ]; then
             echo "[GEP2] Error: Downloaded file is empty"
             exit 1
         fi
-        
+
         # Check minimum file size (1KB)
         FILE_SIZE=$(stat -c%s "{output.reads}.tmp" 2>/dev/null || echo "0")
         if [ "$FILE_SIZE" -lt 1024 ]; then
@@ -808,7 +950,7 @@ sys.exit(0)
             rm -f {output.reads}.tmp
             exit 1
         fi
-        
+
         # Validate gzip integrity for compressed files
         if [[ "{output.reads}" == *.gz ]]; then
             echo "[GEP2] Validating gzip integrity..."
@@ -818,7 +960,7 @@ sys.exit(0)
                 exit 1
             fi
         fi
-        
+
         mv {output.reads}.tmp {output.reads}
         echo "[GEP2] Downloaded reads: {output.reads}"
         """
