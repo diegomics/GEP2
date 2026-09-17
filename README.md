@@ -150,7 +150,7 @@ for var in $(env | grep -i "^SLURM_" | cut -d= -f1); do
     unset "$var"
 done
 
-cd GAME
+cd GEP2
 snakemake --profile execution/slurm
 ```
 
