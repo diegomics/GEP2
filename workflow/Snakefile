@@ -1789,8 +1789,13 @@ def get_priority_read_type_for_assembly(species, asm_id):
 
 def kmer_read_type(species, asm_id):
     """Read type to use for k-mer analysis, or None if it must be skipped.
-    Single source of truth: KMER_STATS + per-assembly skip + DATA_PRIORITY."""
+    Single source of truth: KMER_STATS + per-assembly skip + DATA_PRIORITY.
+    Reads-only entries (no assembly, asm_id missing/None/NA/-) are gated here too,
+    since assembly-keyed k-mer/GenomeScope2/Merqury outputs make no sense without
+    an assembly (they belong under the separate reads-only profiling path instead)."""
     if not _as_bool(config.get("KMER_STATS", True)):
+        return None
+    if _is_reads_only_entry(species, asm_id):
         return None
     if _should_skip_analysis(species, asm_id, "kmer"):
         return None

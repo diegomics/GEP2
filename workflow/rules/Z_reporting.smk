@@ -470,10 +470,14 @@ def get_all_ear_inputs(wildcards):
 def get_all_markdown_files(wildcards):
     """
     Collect all {asm_id}_report.md-files produced by Z00_generate_report across the whole GEP2-run.
+    Reads-only entries (no assembly, asm_id missing/None/NA/-) have no assembly to report
+    on and are skipped here, so they never get an {asm_id} results folder of their own.
     """
     report_files = []
     for species, species_data in samples_config.get("sp_name", {}).items():
         for asm_id in species_data.get("asm_id", {}).keys():
+            if _is_reads_only_entry(species, asm_id):
+                continue
             report_files.append(os.path.join(config["OUT_FOLDER"], "GEP2_results", species, asm_id, f"{asm_id}_report.md"))
     return report_files
 
