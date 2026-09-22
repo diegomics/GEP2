@@ -1,6 +1,6 @@
 # Conda environment for diegomics/gep2_base.
 # version: 0.4.1
-# (all dependencies, exact URLs) is saved in the image at
+# all dependencies, exact URLs are saved in the image at
 # /opt/gep2_base_docker_env.lock.txt
 channels:
   - conda-forge

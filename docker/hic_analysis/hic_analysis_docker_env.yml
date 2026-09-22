@@ -1,0 +1,45 @@
+# Conda environment for diegomics/hic_analysis.
+# version: 0.2.1
+# all dependencies, exact URLs are saved in the image at
+# /opt/hic_analysis_docker_env.lock.txt
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  # Python (3.11: SafeConfigParser was removed in 3.12, needed by some tools)
+  - python==3.11.16
+
+  # Core utilities
+  - pigz==2.8
+  - seqtk==1.5
+  - seqkit==2.13.0
+
+  # Hi-C tools
+  - chromap==0.3.2
+  - pairtools==1.1.3
+  - cooler==0.10.4
+  - hicexplorer==3.7.6
+  - yahs==1.2.2
+  - numpy==1.26.4
+  - matplotlib-base==3.8.4
+
+  # Masking
+  - sdust==0.1
+  - longdust==1.4
+
+  # Pretext
+  - pretextmap==0.2.4
+  - pretextgraph==0.0.9
+  - pretextsnapshot==0.0.9
+
+  # Read mapping
+  - bwa-mem2==2.3
+  - minibwa==0.7
+  - minimap2==2.31
+  - samtools==1.24
+  - mosdepth==0.3.14
+
+  # BED tools and others
+  - bedtools==2.31.1
+  - diamond==2.2.6
+  - tidk==0.2.65
