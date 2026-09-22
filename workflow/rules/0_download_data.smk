@@ -271,7 +271,7 @@ if not found:
             # the data file looks like on disk. Never accept a download in that
             # state. Checked first, so it also skips a slow gzip -t on a huge
             # partial file.
-            if ls "$DIR/${{ACC}}"*.aria2 >/dev/null 2>&1; then
+            if has_aria2_partial "$ACC" "$DIR"; then
                 return 1
             fi
 
@@ -305,7 +305,7 @@ if not found:
         mkdir -p {params.outdir}
         cd {params.outdir}
 
-        MAX_RETRIES=3
+        MAX_RETRIES=6
         RETRY_DELAY=60
         USE_ARIA2=true  # Start with aria2c, switch to enaDataGet HTTP if it fails
 
@@ -332,6 +332,30 @@ if not found:
             return $((1 - kept))
         }}
 
+        # True if aria2c left an unfinished transfer for THIS accession: a control
+        # file together with its data file. The delimiter after $ACC matters - the
+        # download dir is shared by every accession of a species/read type, so a
+        # bare "$ACC"* would also match a longer accession starting with the same
+        # digits (SRR123 vs SRR1234). An orphan control file whose data file is gone
+        # (e.g. Snakemake removed a failed output) is not a partial.
+        has_aria2_partial() {{
+            local ACC=$1 DIR=${{2:-.}} f
+            for f in "$DIR/$ACC".*.aria2 "$DIR/${{ACC}}"_*.aria2; do
+                [ -e "$f" ] && [ -e "${{f%.aria2}}" ] && return 0
+            done
+            return 1
+        }}
+
+        # Resume on the next attempt instead of falling back when aria2c has an
+        # unfinished transfer on disk. The fallbacks cannot resume, so they would
+        # restart from zero - and their files would end up next to aria2c's, which
+        # "aria2c -c" then trusts as a valid prefix. The last attempt always falls
+        # back, as before.
+        resume_next_attempt() {{
+            [ "$ATTEMPT" -lt "$MAX_RETRIES" ] && has_aria2_partial {wildcards.acc}
+        }}
+        RESUMING=false
+
         for ATTEMPT in $(seq 1 $MAX_RETRIES); do
             echo ""
             echo "[GEP2] ------------------------------------------------------------"
@@ -342,7 +366,16 @@ if not found:
             # partial: a 30+ GB transfer that keeps dropping should accumulate
             # progress instead of restarting from zero every time. aria2c is the
             # only resumable method here, so go back to it whenever one survived.
-            if keep_only_resumable {wildcards.acc}; then
+            if [ "$RESUMING" = "true" ]; then
+                # Only aria2c has written here since the last attempt (the fallbacks
+                # were skipped), so every file present is aria2c's own: partials with
+                # a control file, and possibly a finished mate without one. Hand them
+                # all back to aria2c -c - it continues the partials and confirms a
+                # finished mate with a ~1 MiB request instead of re-downloading it.
+                RESUMING=false
+                USE_ARIA2=true
+                echo "[GEP2] Resuming the aria2c transfer from the previous attempt"
+            elif keep_only_resumable {wildcards.acc}; then
                 echo "[GEP2] Resumable partial present - using aria2c to continue"
                 USE_ARIA2=true
             fi
@@ -352,8 +385,8 @@ if not found:
             if [ "$USE_ARIA2" = "true" ]; then
                 echo "[GEP2] Trying aria2c (parallel HTTPS) download..."
 
-                URLS=$(gep2_ena_get_urls {wildcards.acc} single)
-                URLS_EXIT=$?
+                URLS_EXIT=0
+                URLS=$(gep2_ena_get_urls {wildcards.acc} single) || URLS_EXIT=$?
 
                 if [ "$URLS_EXIT" -eq 0 ] && [ -n "$URLS" ]; then
                     URL=$(echo "$URLS" | sed -n '1p')
@@ -376,12 +409,28 @@ if not found:
                         echo "[GEP2] aria2c download produced files"
                     else
                         echo "[GEP2] aria2c failed or produced no valid files (exit $ARIA_EXIT)"
+                        if resume_next_attempt; then
+                            echo "[GEP2] Resumable aria2c partial on disk - retrying aria2c on the next attempt"
+                            echo "[GEP2] (skipping the fallbacks: they cannot resume and would restart from zero)"
+                            echo "[GEP2] Retrying in $RETRY_DELAY seconds..."
+                            RESUMING=true
+                            sleep $RETRY_DELAY
+                            continue
+                        fi
                         echo "[GEP2] Falling back to enaDataGet HTTP..."
                         USE_ARIA2=false
                         rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
                     fi
                 else
                     echo "[GEP2] Could not get URLs from ENA portal API (exit $URLS_EXIT)"
+                    if resume_next_attempt; then
+                        echo "[GEP2] Resumable aria2c partial on disk - retrying aria2c on the next attempt"
+                        echo "[GEP2] (skipping the fallbacks: they cannot resume and would restart from zero)"
+                        echo "[GEP2] Retrying in $RETRY_DELAY seconds..."
+                        RESUMING=true
+                        sleep $RETRY_DELAY
+                        continue
+                    fi
                     echo "[GEP2] Falling back to enaDataGet HTTP..."
                     USE_ARIA2=false
                 fi
@@ -405,9 +454,10 @@ if not found:
                 rm -rf {wildcards.acc}/ {wildcards.acc}.fastq* {wildcards.acc}_*.fastq* 2>/dev/null || true
 
                 SUBMITTED_EXIT=0
-                gep2_download_with_timeout 14400 enaDataGet.py -f submitted -d . {wildcards.acc} || SUBMITTED_EXIT=$?
-
-                echo "[GEP2] Submitted files download finished (exit code: $SUBMITTED_EXIT)"
+                if gep2_ena_submitted_may_be_fastq {wildcards.acc}; then
+                    gep2_download_with_timeout 14400 enaDataGet.py -f submitted -d . {wildcards.acc} || SUBMITTED_EXIT=$?
+                    echo "[GEP2] Submitted files download finished (exit code: $SUBMITTED_EXIT)"
+                fi
 
                 # Rename unpredictable submitted file to standard naming
                 DIR="."
@@ -627,7 +677,7 @@ if not found:
             # the data file looks like on disk. Never accept a download in that
             # state. Checked first, so it also skips a slow gzip -t on a huge
             # partial file.
-            if ls "$DIR/${{ACC}}"*.aria2 >/dev/null 2>&1; then
+            if has_aria2_partial "$ACC" "$DIR"; then
                 return 1
             fi
 
@@ -660,7 +710,7 @@ if not found:
         mkdir -p {params.outdir}
         cd {params.outdir}
 
-        MAX_RETRIES=3
+        MAX_RETRIES=6
         RETRY_DELAY=60
         USE_ARIA2=true  # Start with aria2c, switch to enaDataGet HTTP if it fails
 
@@ -687,6 +737,30 @@ if not found:
             return $((1 - kept))
         }}
 
+        # True if aria2c left an unfinished transfer for THIS accession: a control
+        # file together with its data file. The delimiter after $ACC matters - the
+        # download dir is shared by every accession of a species/read type, so a
+        # bare "$ACC"* would also match a longer accession starting with the same
+        # digits (SRR123 vs SRR1234). An orphan control file whose data file is gone
+        # (e.g. Snakemake removed a failed output) is not a partial.
+        has_aria2_partial() {{
+            local ACC=$1 DIR=${{2:-.}} f
+            for f in "$DIR/$ACC".*.aria2 "$DIR/${{ACC}}"_*.aria2; do
+                [ -e "$f" ] && [ -e "${{f%.aria2}}" ] && return 0
+            done
+            return 1
+        }}
+
+        # Resume on the next attempt instead of falling back when aria2c has an
+        # unfinished transfer on disk. The fallbacks cannot resume, so they would
+        # restart from zero - and their files would end up next to aria2c's, which
+        # "aria2c -c" then trusts as a valid prefix. The last attempt always falls
+        # back, as before.
+        resume_next_attempt() {{
+            [ "$ATTEMPT" -lt "$MAX_RETRIES" ] && has_aria2_partial {wildcards.acc}
+        }}
+        RESUMING=false
+
         for ATTEMPT in $(seq 1 $MAX_RETRIES); do
             echo ""
             echo "[GEP2] ------------------------------------------------------------"
@@ -697,7 +771,16 @@ if not found:
             # partial: a 30+ GB transfer that keeps dropping should accumulate
             # progress instead of restarting from zero every time. aria2c is the
             # only resumable method here, so go back to it whenever one survived.
-            if keep_only_resumable {wildcards.acc}; then
+            if [ "$RESUMING" = "true" ]; then
+                # Only aria2c has written here since the last attempt (the fallbacks
+                # were skipped), so every file present is aria2c's own: partials with
+                # a control file, and possibly a finished mate without one. Hand them
+                # all back to aria2c -c - it continues the partials and confirms a
+                # finished mate with a ~1 MiB request instead of re-downloading it.
+                RESUMING=false
+                USE_ARIA2=true
+                echo "[GEP2] Resuming the aria2c transfer from the previous attempt"
+            elif keep_only_resumable {wildcards.acc}; then
                 echo "[GEP2] Resumable partial present - using aria2c to continue"
                 USE_ARIA2=true
             fi
@@ -707,8 +790,8 @@ if not found:
             if [ "$USE_ARIA2" = "true" ]; then
                 echo "[GEP2] Trying aria2c (parallel HTTPS) download..."
 
-                URLS=$(gep2_ena_get_urls {wildcards.acc} paired)
-                URLS_EXIT=$?
+                URLS_EXIT=0
+                URLS=$(gep2_ena_get_urls {wildcards.acc} paired) || URLS_EXIT=$?
 
                 if [ "$URLS_EXIT" -eq 0 ] && [ -n "$URLS" ]; then
                     URL1=$(echo "$URLS" | sed -n '1p')
@@ -737,12 +820,28 @@ if not found:
                         echo "[GEP2] aria2c download produced files"
                     else
                         echo "[GEP2] aria2c failed or produced no valid files (exit $ARIA_EXIT)"
+                        if resume_next_attempt; then
+                            echo "[GEP2] Resumable aria2c partial on disk - retrying aria2c on the next attempt"
+                            echo "[GEP2] (skipping the fallbacks: they cannot resume and would restart from zero)"
+                            echo "[GEP2] Retrying in $RETRY_DELAY seconds..."
+                            RESUMING=true
+                            sleep $RETRY_DELAY
+                            continue
+                        fi
                         echo "[GEP2] Falling back to enaDataGet HTTP..."
                         USE_ARIA2=false
                         rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
                     fi
                 else
                     echo "[GEP2] Could not get URLs from ENA portal API (exit $URLS_EXIT)"
+                    if resume_next_attempt; then
+                        echo "[GEP2] Resumable aria2c partial on disk - retrying aria2c on the next attempt"
+                        echo "[GEP2] (skipping the fallbacks: they cannot resume and would restart from zero)"
+                        echo "[GEP2] Retrying in $RETRY_DELAY seconds..."
+                        RESUMING=true
+                        sleep $RETRY_DELAY
+                        continue
+                    fi
                     echo "[GEP2] Falling back to enaDataGet HTTP..."
                     USE_ARIA2=false
                 fi
@@ -766,9 +865,10 @@ if not found:
                 rm -rf {wildcards.acc}/ {wildcards.acc}_*.fastq* 2>/dev/null || true
 
                 SUBMITTED_EXIT=0
-                gep2_download_with_timeout 14400 enaDataGet.py -f submitted -d . {wildcards.acc} || SUBMITTED_EXIT=$?
-
-                echo "[GEP2] Submitted files download finished (exit code: $SUBMITTED_EXIT)"
+                if gep2_ena_submitted_may_be_fastq {wildcards.acc}; then
+                    gep2_download_with_timeout 14400 enaDataGet.py -f submitted -d . {wildcards.acc} || SUBMITTED_EXIT=$?
+                    echo "[GEP2] Submitted files download finished (exit code: $SUBMITTED_EXIT)"
+                fi
 
                 # Rename unpredictable submitted files to standard naming
                 DIR="."

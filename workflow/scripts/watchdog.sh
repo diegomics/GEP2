@@ -163,6 +163,39 @@ gep2_ena_get_urls() {
 
 
 # ---------------------------------------------------------------------
+# Should the submitted-format fallback download this run's SUBMITTED files?
+# The rules can only use FASTQ. When ENA lists the submitted files as another
+# format - PacBio HiFi is normally submitted as unaligned BAM, Hi-C often as
+# CRAM - the download is guaranteed to be discarded, and it can be larger than
+# the FASTQ itself.
+#
+# Returns 1 ONLY when a well-formed ENA answer names a non-FASTQ format.
+# Anything else returns 0, so an ENA problem never removes the fallback:
+# a failed query, an empty field, or an error page (gep2_http_fetch_stdout
+# does not use curl --fail, so an HTTP error body arrives with exit 0 - hence
+# the header and accession checks before the format is trusted).
+# Written without pipes so pipefail/SIGPIPE cannot flip the answer.
+# ---------------------------------------------------------------------
+gep2_ena_submitted_may_be_fastq() {
+    local ACC=$1 META="" HEADER="" ROW="" RUN="" FMT=""
+    META=$(gep2_http_fetch_stdout \
+        "https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${ACC}&result=read_run&fields=submitted_format&format=tsv") || return 0
+    { IFS= read -r HEADER; IFS= read -r ROW; } <<< "$META" || true
+    HEADER=${HEADER%$'\r'}
+    ROW=${ROW%$'\r'}
+    [ "$HEADER" = "$(printf 'run_accession\tsubmitted_format')" ] || return 0
+    IFS=$'\t' read -r RUN FMT <<< "$ROW" || true
+    [ "$RUN" = "$ACC" ] && [ -n "$FMT" ] || return 0
+    case "$FMT" in
+        *[Ff][Aa][Ss][Tt][Qq]*) return 0 ;;
+    esac
+    echo "[GEP2] ENA lists the submitted files of ${ACC} as '${FMT}', not FASTQ:" >&2
+    echo "[GEP2]   skipping their download - the rule can only use FASTQ" >&2
+    return 1
+}
+
+
+# ---------------------------------------------------------------------
 # Download paired-end reads via portal API + HTTPS.
 # CWD must be the destination directory.
 # Produces <acc>_1.fastq.gz and <acc>_2.fastq.gz on success.

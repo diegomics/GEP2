@@ -1,0 +1,57 @@
+# Conda environment for diegomics/gep2_base.
+# version: 0.4.1
+# (all dependencies, exact URLs) is saved in the image at
+# /opt/gep2_base_docker_env.lock.txt
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  # Python (3.11: SafeConfigParser was removed in 3.12, needed by some tools)
+  - python==3.11.16
+
+  # Core utilities
+  - pigz==2.8
+  - seqtk==1.5
+  - seqkit==2.13.0
+  - csvtk==0.37.0
+  - tqdm==4.70.0
+
+  # Read processing
+  - bioconda::fastp==1.3.7
+  - bioconda::bbmap==40.02
+
+  # Assembly and purging
+  - bioconda::hifiasm==0.25.0
+  - bioconda::purge_dups==1.2.6
+
+  # QC
+  - bioconda::fastqc==0.12.1
+  - bioconda::nanoplot==1.46.2
+  - conda-forge::python-kaleido==0.2.1
+  - bioconda::multiqc==1.35
+
+  # Assembly evaluation
+  - bioconda::gfastats==1.3.11
+  - bioconda::merqury==1.3
+  - bioconda::merquryfk==1.2
+  - bioconda::genomescope2==2.0.1
+
+  # Data download
+  - bioconda::entrez-direct==26.0
+  - bioconda::enabrowsertools==1.7.2
+  - conda-forge::aria2==1.37.0
+
+  # Reporting
+  - conda-forge::pandoc==3.11
+  - conda-forge::weasyprint==69.0
+
+  # R (4.4, not 4.5: genomescope2 2.0.1 is built against R 4.4)
+  - conda-forge::r-base==4.4.3
+  - conda-forge::r-rcolorbrewer==1.1_3
+  - conda-forge::r-ggplot2==4.0.3
+  - conda-forge::r-dplyr==1.2.1
+  - conda-forge::r-tidyr==1.3.2
+  - conda-forge::r-scales==1.4.0
+  - conda-forge::r-data.table==1.18.6.1
+  - conda-forge::r-gridextra==2.3.1
+  - conda-forge::r-optparse==1.8.2
