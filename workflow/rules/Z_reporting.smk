@@ -19,16 +19,16 @@
 def get_report_gfastats_inputs(wildcards):
     """Get all gfastats output files for this assembly."""
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
-    
+
     gfastats_files = []
     for asm_key, asm_path in sorted(asm_files.items()):
         if asm_path and asm_path != "None":
             asm_basename = get_assembly_basename(asm_path)
             gfastats_files.append(os.path.join(
-                config["OUT_FOLDER"], "GEP2_results", wildcards.species, 
+                config["OUT_FOLDER"], "GEP2_results", wildcards.species,
                 wildcards.asm_id, "gfastats", f"{asm_basename}_stats.txt"
             ))
-    
+
     return gfastats_files
 
 
@@ -41,19 +41,19 @@ def get_report_compleasm_inputs(wildcards):
     if not _as_bool(config.get("RUN_COMPL", True)):
         return []
 
-    
+
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
-    
+
     compleasm_files = []
     for asm_key, asm_path in sorted(asm_files.items()):
         if asm_path and asm_path != "None":
             asm_basename = get_assembly_basename(asm_path)
             compleasm_files.append(os.path.join(
                 config["OUT_FOLDER"], "GEP2_results", wildcards.species,
-                wildcards.asm_id, "compleasm", asm_basename, 
+                wildcards.asm_id, "compleasm", asm_basename,
                 f"{asm_basename}_results.tar.gz"
             ))
-    
+
     return compleasm_files
 
 
@@ -65,7 +65,7 @@ def get_report_busco_inputs(wildcards):
         return []
 
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
-    
+
     busco_files = []
     for asm_key, asm_path in sorted(asm_files.items()):
         if asm_path and asm_path != "None":
@@ -75,7 +75,7 @@ def get_report_busco_inputs(wildcards):
                 wildcards.asm_id, "busco", asm_basename,
                 f"{asm_basename}_summary.txt"
             ))
-    
+
     return busco_files
 
 
@@ -83,12 +83,12 @@ def get_report_merqury_inputs(wildcards):
     """Get Merqury output files if k-mer analysis was run."""
     if not kmer_read_type(wildcards.species, wildcards.asm_id):
         return {'qv': [], 'completeness': []}
-    
+
     merqury_dir = os.path.join(
-        config["OUT_FOLDER"], "GEP2_results", wildcards.species, 
+        config["OUT_FOLDER"], "GEP2_results", wildcards.species,
         wildcards.asm_id, MERQURY_SUBDIR
     )
-    
+
     return {
         'qv': [os.path.join(merqury_dir, f"{wildcards.asm_id}.qv")],
         'completeness': [os.path.join(merqury_dir, f"{wildcards.asm_id}.completeness.stats")]
@@ -100,7 +100,7 @@ def get_report_genomescope_input(wildcards):
     read_type = kmer_read_type(wildcards.species, wildcards.asm_id)
     if not read_type:
         return []
-    
+
     kmer_len = get_kmer_length(read_type)
 
     gs_dir = kmer_asm_genomescope_dir(wildcards.species, wildcards.asm_id, kmer_len)
@@ -112,31 +112,31 @@ def get_report_inspector_inputs(wildcards):
     # Global toggle
     if not _as_bool(config.get("RUN_INSP", True)):
         return []
-    
+
     # Per-assembly skip
     if _should_skip_analysis(wildcards.species, wildcards.asm_id, "insp"):
         return []
-    
+
     # Check for long reads
     long_rt = _get_long_read_type_for_assembly(wildcards.species, wildcards.asm_id)
     if not long_rt:
         return []
-    
+
     # Get Inspector outputs for each assembly file
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
     results = []
-    
+
     for asm_key, asm_path in asm_files.items():
         if not asm_path or asm_path == "None":
             continue
-        
+
         asm_basename = get_assembly_basename(asm_path)
         inspector_dir = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", wildcards.species,
             wildcards.asm_id, "inspector", asm_basename
         )
         results.append(os.path.join(inspector_dir, "summary_statistics"))
-    
+
     return results
 
 
@@ -145,35 +145,35 @@ def get_report_hic_inputs(wildcards):
     # Global toggle
     if not _as_bool(config.get("RUN_HIC", True)):
         return []
-    
+
     # Per-assembly skip
     if _should_skip_analysis(wildcards.species, wildcards.asm_id, "hic"):
         return []
-    
+
     # Check for Hi-C reads
     if not _has_hic_reads_for_assembly(wildcards.species, wildcards.asm_id):
         return []
-    
+
     # Get Hi-C outputs for each assembly file
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
     results = []
-    
+
     for asm_key, asm_path in asm_files.items():
         if not asm_path or asm_path == "None":
             continue
-        
+
         asm_basename = get_assembly_basename(asm_path)
         hic_dir = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", wildcards.species,
             wildcards.asm_id, "hic", asm_basename
         )
-        
+
         results.extend([
             os.path.join(hic_dir, f"{asm_basename}.pretext"),
             os.path.join(hic_dir, f"{asm_basename}.pairtools_stats.txt"),
             os.path.join(hic_dir, f"{asm_basename}.chromap_stats.log")
         ])
-    
+
     return results
 
 
@@ -182,30 +182,30 @@ def get_report_pairtools_stats(wildcards):
     # Global toggle
     if not _as_bool(config.get("RUN_HIC", True)):
         return []
-    
+
     # Per-assembly skip
     if _should_skip_analysis(wildcards.species, wildcards.asm_id, "hic"):
         return []
-    
+
     # Check for Hi-C reads
     if not _has_hic_reads_for_assembly(wildcards.species, wildcards.asm_id):
         return []
-    
+
     # Get pairtools stats file for each assembly file
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
     results = []
-    
+
     for asm_key, asm_path in sorted(asm_files.items()):
         if not asm_path or asm_path == "None":
             continue
-        
+
         asm_basename = get_assembly_basename(asm_path)
         hic_dir = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", wildcards.species,
             wildcards.asm_id, "hic", asm_basename
         )
         results.append(os.path.join(hic_dir, f"{asm_basename}.pairtools_stats.txt"))
-    
+
     return results
 
 
@@ -214,63 +214,63 @@ def get_report_chromap_log(wildcards):
     # Global toggle
     if not _as_bool(config.get("RUN_HIC", True)):
         return []
-    
+
     # Per-assembly skip
     if _should_skip_analysis(wildcards.species, wildcards.asm_id, "hic"):
         return []
-    
+
     # Check for Hi-C reads
     if not _has_hic_reads_for_assembly(wildcards.species, wildcards.asm_id):
         return []
-    
+
     # Get chromap log for each assembly file
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
     results = []
-    
+
     for asm_key, asm_path in sorted(asm_files.items()):
         if not asm_path or asm_path == "None":
             continue
-        
+
         asm_basename = get_assembly_basename(asm_path)
         hic_dir = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", wildcards.species,
             wildcards.asm_id, "hic", asm_basename
         )
         results.append(os.path.join(hic_dir, f"{asm_basename}.chromap_stats.log"))
-    
+
     return results
 
 
 def get_report_hic_snapshots(wildcards):
     """Get Hi-C snapshot PNGs if available (only when not in high-res mode).
-    
+
     Note: These are NOT included as required inputs since PretextSnapshot may fail.
     The script will check if files exist at runtime.
     """
     # Global toggle
     if not _as_bool(config.get("RUN_HIC", True)):
         return []
-    
+
     # Snapshots are not created in high-res mode
     if _as_bool(config.get("HIC_HIGH_RES", False)):
         return []
-    
+
     # Per-assembly skip
     if _should_skip_analysis(wildcards.species, wildcards.asm_id, "hic"):
         return []
-    
+
     # Check for Hi-C reads
     if not _has_hic_reads_for_assembly(wildcards.species, wildcards.asm_id):
         return []
-    
+
     # Get snapshot PNGs for each assembly file
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
     results = []
-    
+
     for asm_key, asm_path in sorted(asm_files.items()):
         if not asm_path or asm_path == "None":
             continue
-        
+
         asm_basename = get_assembly_basename(asm_path)
         snapshot_path = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", wildcards.species,
@@ -278,7 +278,7 @@ def get_report_hic_snapshots(wildcards):
             f"{asm_basename}_snapshots", f"{asm_basename}_FullMap.png"
         )
         results.append(snapshot_path)
-    
+
     return results
 
 
@@ -287,7 +287,7 @@ def get_blobplot_inputs(wildcards):
     # Global toggle
     if not _as_bool(config.get("RUN_BLOB", False)):
         return []
-    
+
     # Per-assembly skip
     if _should_skip_analysis(wildcards.species, wildcards.asm_id, "blob"):
         return []
@@ -325,7 +325,7 @@ def get_blobplot_dirs(wildcards):
     # Global toggle
     if not _as_bool(config.get("RUN_BLOB", False)):
         return []
-    
+
     # Per-assembly skip
     if _should_skip_analysis(wildcards.species, wildcards.asm_id, "blob"):
         return []
@@ -339,7 +339,7 @@ def get_blobplot_dirs(wildcards):
                 config["OUT_FOLDER"], "GEP2_results", wildcards.species,
                 wildcards.asm_id, "decontamination", "blobtools", asm_basename
             ))
-    
+
     return blob_dirs
 
 
@@ -349,7 +349,7 @@ def get_report_fcs_inputs(wildcards):
     so we depend on the sentinel flag and find files at runtime."""
     if not _as_bool(config.get("RUN_FCS", False)):
         return []
-    
+
     return [os.path.join(
         config["OUT_FOLDER"], "GEP2_results", wildcards.species,
         wildcards.asm_id, "decontamination", "fcs-gx", "fcs_gx.done"
@@ -367,7 +367,7 @@ def get_report_fcs_dirs(wildcards):
         return []
 
     asm_files = get_assembly_files(wildcards.species, wildcards.asm_id)
-    
+
     fcs_dirs = []
     for asm_key, asm_path in sorted(asm_files.items()):
         if asm_path and asm_path != "None":
@@ -376,17 +376,17 @@ def get_report_fcs_dirs(wildcards):
                 config["OUT_FOLDER"], "GEP2_results", wildcards.species,
                 wildcards.asm_id, "decontamination", "fcs-gx", asm_basename
             ))
-    
+
     return fcs_dirs
 
 
 def get_all_report_inputs(wildcards):
     """Collect all inputs for the report rule."""
     inputs = []
-    
+
     # Always need gfastats
     inputs.extend(get_report_gfastats_inputs(wildcards))
-    
+
     # Compleasm if enabled
     inputs.extend(get_report_compleasm_inputs(wildcards))
 
@@ -397,23 +397,23 @@ def get_all_report_inputs(wildcards):
     merqury = get_report_merqury_inputs(wildcards)
     inputs.extend(merqury['qv'])
     inputs.extend(merqury['completeness'])
-    
+
     # GenomeScope2 if enabled
     inputs.extend(get_report_genomescope_input(wildcards))
 
     # Inspector if enabled and has long reads
     inputs.extend(get_report_inspector_inputs(wildcards))
-    
+
     # Hi-C pretext files (but NOT snapshots - those are optional and may not exist)
     inputs.extend(get_report_hic_inputs(wildcards))
-    
+
     # Blobplots if enabled (depends on sentinel .done file)
     inputs.extend(get_blobplot_inputs(wildcards))
-    
+
     # FCS-GX is NOT included here as a required input
     # because it may not exist. It's passed as params and
     # checked at runtime in the shell command.
-    
+
     return inputs
 
 
@@ -481,6 +481,23 @@ def get_all_markdown_files(wildcards):
             report_files.append(os.path.join(config["OUT_FOLDER"], "GEP2_results", species, asm_id, f"{asm_id}_report.md"))
     return report_files
 
+
+def get_version_footer():
+    """Pipeline + container version footer appended to each assembly report.
+    Pulls GEP2_VER and CONTAINERS (both parsed once at workflow load time
+    from workflow/envs/containers.yaml)"""
+    container_versions = "|".join(
+        f"{name}:{uri.rsplit(':', 1)[-1]}" for name, uri in CONTAINERS.items()
+    )
+    return (
+        "\n<br>\n<br>\n\n"
+        "```\n"
+        "#Pipeline and containers version\n"
+        f"GEP2:{GEP2_VER}\n"
+        f"{container_versions}\n"
+        "```\n"
+    )
+
 # -------------------------------------------------------------------------------
 # RULES
 # -------------------------------------------------------------------------------
@@ -512,7 +529,8 @@ rule Z00_generate_report:
         hic_snapshots = lambda w: get_report_hic_snapshots(w),
         blobplots = lambda w: get_blobplot_dirs(w),
         fcs_gx_dirs = lambda w: get_report_fcs_dirs(w),
-        script_path = str(SCRIPTS_DIR / "make_gep2_report.py")
+        script_path = str(SCRIPTS_DIR / "make_gep2_report.py"),
+        version_block = get_version_footer()
     container: CONTAINERS["gep2_base"]
     threads: 1
     resources:
@@ -526,9 +544,9 @@ rule Z00_generate_report:
     shell:
         """
         exec > {log} 2>&1
-        
+
         cmd="python {params.script_path} -s {params.species} -a {params.asm_id} -g {params.gfastats}"
-        
+
         BUSCO_SUMMARIES=""
         COMPLEASM_CLEANUP=""
 
@@ -554,32 +572,32 @@ rule Z00_generate_report:
                     fi
                 fi
             done
-            
+
             if [ -n "$COMPLEASM_FULLS" ]; then
                 cmd="$cmd --compleasm-full $COMPLEASM_FULLS"
             fi
         fi
-        
+
         if [ -n "{params.merqury_qv}" ]; then
             cmd="$cmd -q {params.merqury_qv}"
         fi
-        
+
         if [ -n "{params.merqury_completeness}" ]; then
             cmd="$cmd -m {params.merqury_completeness}"
         fi
-        
+
         if [ -n "{params.genomescope_plot}" ]; then
             cmd="$cmd --genomescope-plot {params.genomescope_plot}"
         fi
-        
+
         if [ -n "{params.merqury_qv}" ]; then
             cmd="$cmd --merqury-dir {params.merqury_dir}"
         fi
-        
+
         if [ -n "{params.inspector}" ]; then
             cmd="$cmd --Inspector {params.inspector}"
         fi
-        
+
         if [ -n "{params.pairtools_stats}" ]; then
             cmd="$cmd --pairtools-stats {params.pairtools_stats}"
         fi
@@ -597,11 +615,11 @@ rule Z00_generate_report:
                 echo "[GEP2] Hi-C snapshot not found (skipping): $snapshot"
             fi
         done
-        
+
         if [ -n "$HIC_SNAPSHOTS" ]; then
             cmd="$cmd --hic $HIC_SNAPSHOTS"
         fi
-        
+
 
         BLOB_PNGS=""
         for blobdir in {params.blobplots}; do
@@ -630,16 +648,21 @@ rule Z00_generate_report:
                 fi
             fi
         done
-        
+
         if [ -n "$FCS_GX_FILES" ]; then
             cmd="$cmd --fcs-gx $FCS_GX_FILES"
         fi
-        
+
         cmd="$cmd -o {output.report}"
-        
+
         echo "[GEP2] Command: $cmd"
         $cmd
-        
+
+        # Append pipeline/container version footer (transparency/reproducibility)
+        cat >> {output.report} <<'GEP2_VERSION_EOF'
+{params.version_block}
+GEP2_VERSION_EOF
+
         # Cleanup extracted compleasm directories
         for cleanup_dir in $COMPLEASM_CLEANUP; do
             if [ -d "$cleanup_dir" ]; then
@@ -649,25 +672,25 @@ rule Z00_generate_report:
         done
 
         echo "[GEP2] Checking for images to build portable markdown package..."
-        
+
         REPORT_DIR="$(dirname "{output.report}")"
         cd "$REPORT_DIR"
-        
+
         # Kind of crappy code here but works... grab ANY filepath ending in .png
         IMG_PATHS=$(grep -oE '[a-zA-Z0-9./_-]+\\.png' "$(basename "{output.report}")" || true)
-        
+
         # Only create the package if IMG_PATHS is not empty
         if [ -n "$IMG_PATHS" ]; then
             echo "[GEP2] Images found! Creating portable package..."
             echo "[GEP2] Detected paths:"
             echo "$IMG_PATHS"  # This is mainly for debug, maybe should go soon...
-            
+
             PORTABLE_NAME="{wildcards.asm_id}_portable_md"
             mkdir -p "$PORTABLE_NAME"
-            
+
             # Copy the markdown file
             cp "$(basename "{output.report}")" "$PORTABLE_NAME/"
-            
+
             # Copy the images while preserving dir structure
             for img in $IMG_PATHS; do
                 if [ -f "$img" ]; then
@@ -676,11 +699,11 @@ rule Z00_generate_report:
                     echo "[GEP2] WARNING: Portable MD could not find image: $img" >&2
                 fi
             done
-            
+
             # Compress and clean up
             tar -czvf "$PORTABLE_NAME.tar.gz" "$PORTABLE_NAME/"
             rm -rf "$PORTABLE_NAME"
-            
+
             echo "[GEP2] Successfully created $PORTABLE_NAME.tar.gz"
         else
             echo "[GEP2] No images found. Skipping portable markdown package creation."
