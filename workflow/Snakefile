@@ -2568,8 +2568,13 @@ def get_all_expected_outputs():
             print("[GEP2] RUN_BLOB is off - skipping BlobToolKit analysis")
 
     # Final reports (always runs, adapts to what's available)
-    expected_files.extend(get_report_results())
-    expected_files.append(get_super_report())
+    report_results = get_report_results()
+    expected_files.extend(report_results)
+    if report_results:
+        expected_files.append(get_super_report())
+    else:
+        if IS_MAIN:
+            print("[GEP2] No assemblies to report on (reads-only run) - skipping super-report")
 
     # EAR YAML template (if enabled)
     ear_yaml = _as_bool(config.get("EAR_YAML", False))
