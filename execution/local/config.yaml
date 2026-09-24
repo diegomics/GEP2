@@ -11,6 +11,10 @@ cores: 96
 # that would crash your workstation, even if you have enough free CPU cores.
 resources:
   mem_mb: 500000
+  # Max ENA/URL downloads running at once, across the whole workflow. Each
+  # download rule consumes one. Keep modest since EBI refuses connections from
+  # an address that opens too many at once.
+  downloads: 4
 
 # -----------------------------------------------------------------------------
 # Default Job Resources

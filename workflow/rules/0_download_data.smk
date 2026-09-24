@@ -66,15 +66,20 @@ rule _00_download_assembly:
     """Download assemblies from URLs or NCBI accessions"""
     output:
         asm = "{outdir}/downloaded_data/{species}/assemblies/{filename}"
+    log:
+        "{outdir}/downloaded_data/{species}/assemblies/{filename}.download.log"
     params:
         manifest = manifest_path
     threads: cpu_func("download_data")
     resources:
         mem_mb = mem_func("download_data"),
-        runtime = time_func("download_data")
+        runtime = time_func("download_data"),
+        downloads = 1
     container: CONTAINERS["gep2_base"]
     shell:
         """
+        exec > {log} 2>&1
+
         # Verify entry exists in manifest
         MANIFEST_INFO=$(python3 -c "
 import json, sys
@@ -197,6 +202,8 @@ rule _00_download_reads_sra_single:
     """Download single-end/long reads from SRA/ENA"""
     output:
         reads = "{outdir}/downloaded_data/{species}/reads/{read_type}/{acc}.fastq.gz"
+    log:
+        "{outdir}/downloaded_data/{species}/reads/{read_type}/{acc}.download.log"
     params:
         outdir = lambda w: os.path.join(w.outdir, "downloaded_data", w.species, "reads", w.read_type),
         manifest = manifest_path,
@@ -204,10 +211,13 @@ rule _00_download_reads_sra_single:
     threads: cpu_func("download_data")
     resources:
         mem_mb = mem_func("download_data"),
-        runtime = time_func("download_data")
+        runtime = time_func("download_data"),
+        downloads = 1
     container: CONTAINERS["gep2_base"]
     shell:
         """
+        exec > {log} 2>&1
+
         # Verify accession exists in manifest as single-end/long reads
         python3 -c "
 import json, sys
@@ -396,7 +406,7 @@ if not found:
                     # Failure here is expected (fallback drives the retry loop).
                     ARIA_EXIT=0
                     gep2_download_with_timeout 14400 aria2c \
-                        -x 16 -s 16 -c \
+                        -x 8 -s 8 -c \
                         --max-tries=3 --retry-wait=10 \
                         --allow-overwrite=true \
                         --auto-file-renaming=false \
@@ -596,6 +606,8 @@ rule _00_download_reads_sra:
     output:
         r1 = "{outdir}/downloaded_data/{species}/reads/{read_type}/{acc}_1.fastq.gz",
         r2 = "{outdir}/downloaded_data/{species}/reads/{read_type}/{acc}_2.fastq.gz"
+    log:
+        "{outdir}/downloaded_data/{species}/reads/{read_type}/{acc}.download.log"
     params:
         outdir = lambda w: os.path.join(w.outdir, "downloaded_data", w.species, "reads", w.read_type),
         manifest = manifest_path,
@@ -603,10 +615,13 @@ rule _00_download_reads_sra:
     threads: cpu_func("download_data")
     resources:
         mem_mb = mem_func("download_data"),
-        runtime = time_func("download_data")
+        runtime = time_func("download_data"),
+        downloads = 1
     container: CONTAINERS["gep2_base"]
     shell:
         """
+        exec > {log} 2>&1
+
         # Verify accession exists in manifest as paired-end reads
         python3 -c "
 import json, sys
@@ -629,7 +644,7 @@ if not found:
 
         # CHECK IF DOWNLOAD PRODUCED PAIRED FILES
         # -------------------------------------------------------------------
-        # Memo for the integrity check below. set -euo pipefail is active
+        # Comment for the integrity check below. set -euo pipefail is active
         # (shell.prefix), so this MUST be initialised before first use or -u aborts.
         VERIFIED_SIG=""
 
@@ -806,7 +821,7 @@ if not found:
                     ARIA_EXIT=0
                     for url in "$URL1" "$URL2"; do
                         gep2_download_with_timeout 14400 aria2c \
-                            -x 16 -s 16 -c \
+                            -x 8 -s 8 -c \
                             --max-tries=3 --retry-wait=10 \
                             --allow-overwrite=true \
                             --auto-file-renaming=false \
@@ -1004,6 +1019,8 @@ rule _00_download_reads_url:
     """Download reads from direct URLs (only matches non-SRA filenames)"""
     output:
         reads = "{outdir}/downloaded_data/{species}/reads/{read_type}/{filename}"
+    log:
+        "{outdir}/downloaded_data/{species}/reads/{read_type}/{filename}.download.log"
     wildcard_constraints:
         filename=r"(?![SED]RR[0-9]+(_[12])?\.fastq(\.gz)?$).+\.(fastq|fq)(\.gz)?$"
     params:
@@ -1011,10 +1028,13 @@ rule _00_download_reads_url:
     threads: cpu_func("download_data")
     resources:
         mem_mb = mem_func("download_data"),
-        runtime = time_func("download_data")
+        runtime = time_func("download_data"),
+        downloads = 1
     container: CONTAINERS["gep2_base"]
     shell:
         """
+        exec > {log} 2>&1
+
         SOURCE=$(python3 -c "
 import json, sys
 with open('{params.manifest}') as f:

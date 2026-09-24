@@ -12,6 +12,15 @@ max-jobs-per-second: 1
 max-status-checks-per-second: 0.01
 
 # -----------------------------------------------------------------------------
+# Global Resource Limits
+# -----------------------------------------------------------------------------
+# Max ENA/URL downloads running at once, across every submitted job. Each
+# download rule consumes one. The whole cluster usually shares one
+# institutional address range, so ENA sees a single very busy client.
+resources:
+  downloads: 4
+
+# -----------------------------------------------------------------------------
 # Error Handling & Latency
 # -----------------------------------------------------------------------------
 # How many times to restart a job if it fails (0 = fail immediately)
