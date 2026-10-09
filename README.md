@@ -100,7 +100,7 @@ Load the conda environment like `conda activate GEP2_env` and in the GEP2 folder
 nohup snakemake --profile execution/slurm &
 ```
 > A convenient way to check which particular rules are running on the jobs is:<br>
-> `squeue --me -o "%.18i %.9P %.8j %.8T %.10M %.9l %.6D %R %k"` (or use -u $USER instead of --me).
+> `squeue --me -S -t,i -o "%.10i %.9P %.12j %.2t %.10M %.11l %.4C %.7m %R | %k"` (or use -u $USER instead of --me).
 
 #### On Local Computer:
 
@@ -159,7 +159,7 @@ snakemake --profile execution/slurm
 
 ## Results Structure
 
-Open the report with a markdown renderer, like [VS Code](https://code.visualstudio.com) or [MarkText](https://marktext.me) (also notice `{asm_id}_portable_md.tar.gz`, which contains the md file and all the plots to easily share the report!):
+Open the report with a markdown renderer, like [Zed](https://zed.dev), [VS Code](https://code.visualstudio.com) or [MarkText](https://marktext.me) (also notice `{asm_id}_portable_md.tar.gz`, which contains the md file and all the plots to easily share the report!):
 
 ```
 GEP2_results/{sp_name}/{asm_id}/{asm_id}_report.md
