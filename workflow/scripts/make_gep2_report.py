@@ -27,7 +27,7 @@ import requests
 from urllib.parse import quote
 from pathlib import Path
 
-__version__ = '0.3'
+__version__ = '0.4'
 
 # ---- Star-rating calibration -------------------------------------------------
 # Adapts EBP's N50 targets to species with small chromosomes...
@@ -382,7 +382,7 @@ def parse_compleasm_full(filepath):
     
     seen = {}
     counts = {'Single': 0, 'Duplicated': 0, 'Retrocopy': 0,
-              'Fragmented': 0, 'Interspersed': 0, 'Missing': 0}
+              'Fragmented': 0, 'Interspaced': 0, 'Missing': 0}
     total_complete_copies = 0  # All Single/Duplicated rows (all physical copies)
     frameshifted_copies = 0    # Single/Duplicated rows with column 11 > 0
     
@@ -610,6 +610,28 @@ def parse_merqury_completeness(filepath, num_assemblies):
     return completeness_values
 
 
+def parse_merqury_both(filepath, column):
+    """Return the combined asm1+asm2 value from a Merqury/MerquryFK .qv
+    (column="qv") or .completeness.stats (column="completeness") file.
+    The combined row is labelled 'both'/'Both' (or 'asm1+asm2' in MerquryFK
+    completeness); returns None if the file has no such row."""
+    try:
+        with open(filepath) as f:
+            rows = [ln.rstrip("\n").split("\t") for ln in f if ln.strip()]
+        idx = 3 if column == "qv" else 4                   # Merqury (no header)
+        if rows and rows[0][0].strip().lower() == "assembly":   # MerquryFK header
+            names = ("qv",) if column == "qv" else ("% covered", "completeness")
+            idx = next((i for i, c in enumerate(rows[0])
+                        if c.strip().lower() in names), len(rows[0]) - 1)
+        for parts in rows:
+            label = parts[0].strip().lower()
+            if (label == "both" or "+" in label) and len(parts) > idx:
+                return float(parts[idx])
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def find_merqury_plots(merqury_dir, asm_id):
     """Find Merqury/MerquryFK spectra plots. Both use spectra-cn/spectra-asm with
     .fl/.ln/.st suffixes; prefer filled (.fl), fall back to line/stack."""
@@ -818,6 +840,8 @@ def format_number(value):
         return "N/A"
     if isinstance(value, (int, float)):
         if isinstance(value, float):
+            if value != value or value in (float("inf"), float("-inf")):
+                return str(value)          # nan/inf (e.g. Merqury QV with no errors)
             if value < 10:
                 return f"{value:.4f}"
             elif value < 100:
@@ -1009,7 +1033,8 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, bu
                    genomescope_plot, 
                    merqury_plots, hic_plots, blob_plots, fcs_gx_files,
                    inspector_values, output_file, kmer_tool="MERQ",
-                   pairtools_list=None, chromap_list=None, expected_chr_size=None):
+                   pairtools_list=None, chromap_list=None, expected_chr_size=None,
+                   merqury_both=(None, None)):
     """Generate the markdown report supporting 1 or 2 assemblies."""
     
     num_assemblies = len(gfastats_list)
@@ -1271,7 +1296,7 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, bu
     )
 
     # Grab dynamic names (check compleasm first, then busco, mirroring other_lineage below)
-    euka_lineage = next((m.get('eukaryota_lineage') for m in compleasm_list + busco_list if m.get('eukaryota_lineage')), "eukaryota (odb12)")
+    euka_lineage = next((m.get('eukaryota_lineage') for m in compleasm_list + busco_list if m.get('eukaryota_lineage')), "eukaryota (odb12.2)")
     
     other_lineage = next((m.get('other_lineage') for m in compleasm_list if m.get('other_lineage')), None)
     if not other_lineage:
@@ -1285,6 +1310,13 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, bu
             report_lines.append(f"x = {other_lineage}<br>")
     
     report_lines.append(haploid_info)
+
+    # Combined asm1+asm2 k-mer values (only present with 2 assemblies)
+    both_qv, both_compl = merqury_both
+    if both_qv is not None:
+        report_lines.append(f"{kmer_tool} QV for both: {format_number(both_qv)}<br>")
+    if both_compl is not None:
+        report_lines.append(f"{kmer_tool} Compl. for both: {format_number(both_compl)}<br>")
     
     # Add GenomeScope2 section if plot exists
     if genomescope_plot and os.path.exists(genomescope_plot):
@@ -1797,6 +1829,14 @@ Examples:
             merqury_completeness_values = parse_merqury_completeness(
                 args.merqury_completeness, num_assemblies)
         
+        # Combined asm1+asm2 values ('both' rows), shown below the table
+        merqury_both = (None, None)
+        if num_assemblies == 2:
+            merqury_both = (
+                parse_merqury_both(args.merqury_qv, "qv") if args.merqury_qv else None,
+                parse_merqury_both(args.merqury_completeness, "completeness")
+                if args.merqury_completeness else None)
+
         # Find Merqury plots
         merqury_plots = find_merqury_plots(args.merqury_dir, args.assembly)
 
@@ -1870,7 +1910,8 @@ Examples:
             kmer_tool=kmer_tool,
             pairtools_list=pairtools_list,
             chromap_list=chromap_list,
-            expected_chr_size=expected_chr_size
+            expected_chr_size=expected_chr_size,
+            merqury_both=merqury_both
         )
         
         # Convert to PDF if requested

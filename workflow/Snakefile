@@ -1,7 +1,7 @@
 # GEP2 - Genome Evaluation Pipeline 2
 # by Diego De Panis, 2025
 # note: AI tools may have been used to improve, clean and/or comment this version of the code
-GEP2_VER = "0.7.2"
+GEP2_VER = "0.8"
 
 # Debug verbosity (set to True for detailed DAG building messages)
 VERBOSE = False
@@ -22,6 +22,19 @@ import urllib.parse
 from urllib.error import URLError, HTTPError
 from urllib.parse import urlparse, unquote
 from pathlib import Path
+
+# Minimum Snakemake version required by GEP2
+GEP2_MIN_SNAKEMAKE = "9.27.0"
+from snakemake import __version__ as _SMK_VERSION
+from packaging.version import Version as _Version
+if _Version(_SMK_VERSION) < _Version(GEP2_MIN_SNAKEMAKE):
+    sys.stderr.write(
+        f"\n[GEP2] ERROR: Snakemake version should be at least {GEP2_MIN_SNAKEMAKE} "
+        f"(you are using {_SMK_VERSION}).\n"
+        f"[GEP2] Please update the GEP2_env, e.g. recreate it from the GEP2 folder with:\n"
+        f"[GEP2]   conda deactivate; conda env remove -n GEP2_env; conda env create -f install.yml\n\n"
+    )
+    sys.exit(1)
 
 
 # -------------------------------------------------------------------------------
@@ -54,6 +67,9 @@ BUSCO_DOWNLOAD_DIR = os.path.join(DB_FOLDER, "busco_downloads")
 FCS_GX_DIR = os.path.join(DB_FOLDER, "fcs_gx")
 TAXDUMP_DIR = os.path.join(DB_FOLDER, "taxdump")
 UNIPROT_DIR     = os.path.join(DB_FOLDER, "uniprot")
+
+# OrthoDB version used for gene completeness (same for compleasm and BUSCO)
+ODB_VERSION = "odb12.2"
 
 # Folders for diamond depending on the mode
 DIAMOND_MODE = config.get("DIAMOND_MODE", "standard")
@@ -378,6 +394,7 @@ if os.path.exists(manifest_path):
 if IS_MAIN:
     print(f"[GEP2] DB_FOLDER: {DB_FOLDER}")
     print(f"[GEP2] BUSCO_DB_DIR: {BUSCO_DB_DIR}")
+    print(f"[GEP2] ODB_VERSION: {ODB_VERSION}")
     print(f"[GEP2] FCS_GX_DIR: {FCS_GX_DIR}")
     print(f"[GEP2] TAXDUMP_DIR: {TAXDUMP_DIR}")
     print(f"[GEP2] DIAMOND_MODE: {DIAMOND_MODE}")
@@ -1425,17 +1442,16 @@ samples_config = load_samples_config()
 
 if IS_MAIN:
     banner = r"""
-         ____/\/\/\/\/\______/\/\/\/\/\/\______/\/\/\/\/\________/\/\/\/\/\____
-        __/\/\______________/\/\______________/\/\____/\/\______________/\/\__
-       __/\/\__/\/\/\______/\/\/\/\/\________/\/\/\/\/\__________/\/\/\/\____
-      __/\/\____/\/\______/\/\______________/\/\______________/\/\__________
-     ____/\/\/\/\/\______/\/\/\/\/\/\______/\/\______________/\/\/\/\/\/\__
-    ______________________________________________________________________
+     ______/\/\/\/\/\______/\/\/\/\/\/\______/\/\/\/\/\________/\/\/\/\/\______
+    ____/\/\______________/\/\______________/\/\____/\/\______________/\/\____
+   ____/\/\__/\/\/\______/\/\/\/\/\________/\/\/\/\/\__________/\/\/\/\______
+  ____/\/\____/\/\______/\/\______________/\/\______________/\/\____________
+ ______/\/\/\/\/\______/\/\/\/\/\/\______/\/\______________/\/\/\/\/\/\____
+__________________________________________________________________________
     """
     print(banner, flush=True)
     print("Genome Evaluation Pipeline 2", flush=True)
     print(f"v{GEP2_VER}", flush=True)
-    print(f"Configuration: {CONFIG_PATH}", flush=True)
     print(f"Output folder: {out_folder}", flush=True)
     print("Pipeline starting NOW!", flush=True)
     print("=" * 60, flush=True)

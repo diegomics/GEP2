@@ -7,7 +7,7 @@ cores: 96
 # -----------------------------------------------------------------------------
 # Machine Protection (Global Resource Limits)
 # -----------------------------------------------------------------------------
-# These limits prevent Snakemake from spawning too many large-memory jobs 
+# These limits prevent Snakemake from spawning too many large-memory jobs
 # that would crash your workstation, even if you have enough free CPU cores.
 resources:
   mem_mb: 500000
@@ -29,7 +29,7 @@ default-resources:
 keep-going: true
 printshellcmds: false
 
-# Wait time (seconds) for filesystem operations. 
+# Wait time (seconds) for filesystem operations.
 latency-wait: 60
 
 # Determines what triggers a job rerun. [mtime] checks file modification dates.
@@ -40,7 +40,7 @@ rerun-triggers: [mtime]
 # -----------------------------------------------------------------------------
 software-deployment-method: [apptainer]
 
-# Bind paths for local execution. 
+# Bind paths for local execution.
 # IMPORTANT!!! bind here all the folders you use, like "--bind /my/storage:/my/storage --bind /my/folder:/my/folder"
-apptainer-args: ""
-
+# In the case you are using slurm or need no binds, leave this line commented out
+#apptainer-args: "--bind /my/storage:/my/storage"

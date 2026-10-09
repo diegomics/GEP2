@@ -30,7 +30,7 @@ FAST_TEMP_DIR: "/dev/shm"
 
 
 # Shared database folder for BUSCO, FCS-GX, uniptot, etc.
-# Options: "auto" (creates a 'databases' folder inside the GEP2 base folder), or specify a path 
+# Options: "auto" (creates a 'databases' folder inside the GEP2 base folder), or specify a path
 # "/path/to/dir" to use that particular folder to put all the folders
 ## Databases are downloaded once and reused across runs (caution: they take disk space!!!)
 DB_FOLDER: "/srv/public/users/ddepanis/DBs"
@@ -46,9 +46,10 @@ DB_FOLDER: "/srv/public/users/ddepanis/DBs"
 RUN_COMPL: on
 
 # BUSCO lineage to use
-## Options: "auto" (searches for best matching lineage in addition to eukaryota, but may fail!), 
-## or specific lineage name (e.g., eukaryota, primates, insecta, fungi, etc)
-### get the lineage names here: https://busco-data.ezlab.org/v5/data/lineages/
+## Options: Specific lineage name -RECOMMENDED- (e.g., eukaryota, primates, insecta, fungi, etc),
+## or "auto" (searches for best matching lineage in addition to eukaryota, but WARNING: may fail!)
+### get the lineage names here: https://busco-data.ezlab.org/v6/data/lineages/
+### If needed, OrthoDB version can be changed from workflow/Snakefile (ODB_VERSION = "odb12.2")
 LINEAGE: eukaryota
 
 # Use BUSCO instead of COMPLEASM | on / off (default)

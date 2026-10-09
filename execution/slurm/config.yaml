@@ -44,6 +44,7 @@ default-resources:
   qos: "standard"
   mem_mb: 2000
   runtime: 60
+#  slurm_extra: "'--mail-type=FAIL --mail-user=user@domain.de'"
 
 # -----------------------------------------------------------------------------
 # Software Stack (Apptainer/Singularity)
@@ -51,23 +52,26 @@ default-resources:
 software-deployment-method: [apptainer]
 
 # IMPORTANT!!! bind here all the folders you use, like "--bind /my/storage:/my/storage --bind /my/folder:/my/folder"
-apptainer-args: ""
+# In the case you are using local or need no binds, leave this line commented out
+#apptainer-args: "--bind /my/storage:/my/storage"
 
 # -----------------------------------------------------------------------------
 # Slurm Plugin Settings
 # -----------------------------------------------------------------------------
-slurm:
-  # Log paths: wildcards are essential here to prevent overwriting
-  output: "logs/{rule}/{rule}.{wildcards}.%j.out"
-  error: "logs/{rule}/{rule}.{wildcards}.%j.err"
-  jobname: "{rule}"
+# Where Snakemake writes the Slurm log of each job (default: .snakemake/slurm_logs/)
+#slurm-logdir: "logs/slurm"
 
-  # Cluster Email settings
-  ###mail-user: "user@domain.de" 
-  ###mail-type: "FAIL,END" 
+# Keep Slurm logs of successful jobs too (default: deleted on success)
+#slurm-keep-successful-logs: true
 
-  # Commands to run *before* the actual job script (e.g., loading modules)
-  script_preamble: |
-    module load apptainer
-    set -euo pipefail
+# Prefix for Slurm job names (the rule name is shown in the job comment: squeue -o "%.10i %.40k")
+slurm-jobname-prefix: "GEP2"
 
+# Retries per job-status check when the Slurm query fails (e.g. accounting DB hiccup).
+# If all fail, Snakemake loses track of the running jobs and the run hangs.
+# Spaced by max-status-checks-per-second (0.01 -> 100 s): 70 ≈ 2 h (default 5 ≈ 7 min).
+slurm-status-attempts: 70
+
+# Where job status comes from: "sacct" (default, accounting DB) or "squeue" (controller).
+# squeue avoids DB errors but can miss jobs finished more than MinJobAge ago; comment this line to keep sacct.
+#slurm-status-command: "squeue"

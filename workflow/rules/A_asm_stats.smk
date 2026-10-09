@@ -16,10 +16,11 @@
 rule A00_download_compleasm_db:
     """Download compleasm/BUSCO database (runs only once, stored in DB_FOLDER)"""
     output:
-        flag = os.path.join(BUSCO_DB_DIR, "eukaryota_odb12.done"),
+        flag = os.path.join(BUSCO_DB_DIR, f"eukaryota_{ODB_VERSION}.done"),
         placement_flag = os.path.join(BUSCO_DB_DIR, "placement_files.done")
     params:
-        db_dir = BUSCO_DB_DIR
+        db_dir = BUSCO_DB_DIR,
+        odb    = ODB_VERSION
     threads: cpu_func("download_db")
     resources:
         mem_mb = mem_func("download_db"),
@@ -34,7 +35,7 @@ rule A00_download_compleasm_db:
         echo "[GEP2] Downloading compleasm eukaryota database to {params.db_dir}"
         mkdir -p {params.db_dir}
         
-        compleasm download eukaryota --odb odb12 --library_path {params.db_dir} 2>&1 | tee {log}
+        compleasm download eukaryota --odb {params.odb} --library_path {params.db_dir} 2>&1 | tee {log}
         
         touch {output.flag}
         touch {output.placement_flag}
@@ -46,9 +47,10 @@ rule A00_download_compleasm_db:
 rule A00_download_busco_db:
     """Download BUSCO eukaryota dataset once (shared, copied into temp per job)."""
     output:
-        flag = os.path.join(BUSCO_DOWNLOAD_DIR, "eukaryota.done")
+        flag = os.path.join(BUSCO_DOWNLOAD_DIR, f"eukaryota_{ODB_VERSION}.done")
     params:
-        db_dir = BUSCO_DOWNLOAD_DIR
+        db_dir = BUSCO_DOWNLOAD_DIR,
+        odb    = ODB_VERSION
     threads: cpu_func("download_db")
     resources:
         mem_mb = mem_func("download_db"),
@@ -62,7 +64,7 @@ rule A00_download_busco_db:
         """
         echo "[GEP2] Downloading BUSCO eukaryota dataset to {params.db_dir}"
         mkdir -p {params.db_dir}
-        busco --download_path {params.db_dir} --download eukaryota_odb12.2 2>&1 | tee {log}
+        busco --download_path {params.db_dir} --download eukaryota_{params.odb} 2>&1 | tee {log}
         touch {output.flag}
         echo "[GEP2] BUSCO database download complete"
         """
@@ -98,7 +100,7 @@ rule A02_compleasm:
     """Run compleasm for gene completeness analysis."""
     input:
         asm = get_assembly_input,
-        db_flag = os.path.join(BUSCO_DB_DIR, "eukaryota_odb12.done")
+        db_flag = os.path.join(BUSCO_DB_DIR, f"eukaryota_{ODB_VERSION}.done")
     output:
         summary = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "{species}", "{assembly}",
@@ -114,6 +116,7 @@ rule A02_compleasm:
             "compleasm", w.asm_basename
         ),
         shared_db = BUSCO_DB_DIR,
+        odb = ODB_VERSION,
         lineage_arg = lambda w: "--autolineage" if config.get("LINEAGE", "auto").lower() == "auto" else f"-l {config.get('LINEAGE')}"
     threads: cpu_func("compleasm")
     resources:
@@ -162,7 +165,7 @@ rule A02_compleasm:
             -t {threads} \
             --library_path "$TMPDB" \
             {params.lineage_arg} \
-            --odb odb12 \
+            --odb {params.odb} \
             --retrocopy
         
         echo "[GEP2] Packaging outputs"
@@ -204,7 +207,7 @@ rule A02_busco:
     """Assess assembly completeness with BUSCO (euka copied to temp, others downloaded to temp)."""
     input:
         asm     = get_assembly_input,
-        db_flag = os.path.join(BUSCO_DOWNLOAD_DIR, "eukaryota.done")
+        db_flag = os.path.join(BUSCO_DOWNLOAD_DIR, f"eukaryota_{ODB_VERSION}.done")
     output:
         summary = os.path.join(
             out_folder, "{species}", "{assembly}",
@@ -219,6 +222,7 @@ rule A02_busco:
             out_folder, w.species, w.assembly, "busco", w.asm_basename
         ),
         shared_db    = BUSCO_DOWNLOAD_DIR,
+        odb          = ODB_VERSION,
         lineage_mode = lambda w: str(config.get("LINEAGE", "auto")).lower()
     threads: cpu_func("compleasm")
     resources:
@@ -260,16 +264,20 @@ rule A02_busco:
             echo "[GEP2] LINEAGE=auto -> --auto-lineage-euk"
             BUSCO_LINEAGE_ARGS="--auto-lineage-euk"
         elif [ "${{LINEAGE_MODE%%_odb*}}" = "eukaryota" ]; then
-            EUKA_DIR="$(find "$DLPATH/lineages" -maxdepth 1 -type d -name 'eukaryota_odb*' 2>/dev/null | sort | tail -1)"
-            if [ -n "$EUKA_DIR" ]; then
-                BUSCO_LINEAGE_ARGS="-l $(basename "$EUKA_DIR")"
+            if [ -d "$DLPATH/lineages/eukaryota_{params.odb}" ]; then
+                echo "[GEP2] Using pre-downloaded eukaryota_{params.odb} dataset"
             else
-                BUSCO_LINEAGE_ARGS="-l eukaryota"
+                echo "[GEP2] eukaryota_{params.odb} not pre-downloaded -> BUSCO downloads it"
             fi
-            echo "[GEP2] Using pre-downloaded eukaryota dataset"
+            BUSCO_LINEAGE_ARGS="-l eukaryota_{params.odb}"
         else
-            echo "[GEP2] LINEAGE=$LINEAGE_MODE -> downloaded into the per-job temp DB"
-            BUSCO_LINEAGE_ARGS="-l $LINEAGE_MODE"
+            # Pin the OrthoDB version unless the lineage name already carries one
+            case "$LINEAGE_MODE" in
+                *_odb*) BUSCO_LINEAGE="$LINEAGE_MODE" ;;
+                *)      BUSCO_LINEAGE="${{LINEAGE_MODE}}_{params.odb}" ;;
+            esac
+            echo "[GEP2] LINEAGE=$LINEAGE_MODE -> $BUSCO_LINEAGE, downloaded into the per-job temp DB"
+            BUSCO_LINEAGE_ARGS="-l $BUSCO_LINEAGE"
         fi
 
         busco \

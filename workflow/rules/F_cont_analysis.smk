@@ -93,6 +93,27 @@ def get_blob_asm_input(wildcards):
         f"Could not find assembly for {wildcards.species}/{wildcards.asm_id}/{wildcards.asm_basename}"
     )
 
+
+def get_blob_busco_archive(wildcards):
+    """compleasm (or BUSCO, if PREFER_BUSCO) results archive of this assembly, whose
+    full table(s) are added to the BlobDir for the BUSCO ring of the snail plot.
+    Empty when RUN_COMPL is off."""
+    if not _as_bool(config.get("RUN_COMPL", True)):
+        return []
+    tool = "busco" if _as_bool(config.get("PREFER_BUSCO", False)) else "compleasm"
+    return [os.path.join(
+        config["OUT_FOLDER"], "GEP2_results", wildcards.species, wildcards.asm_id,
+        tool, wildcards.asm_basename, f"{wildcards.asm_basename}_results.tar.gz"
+    )]
+
+
+def get_compleasm_version():
+    """compleasm version from its container tag (e.g. compleasm:v0.2.9 -> 0.2.9),
+    written into the table header blobtools needs; "0" if the tag has none."""
+    match = re.search(r":v?(\d+(?:\.\d+)*)$", CONTAINERS.get("compleasm", ""))
+    return match.group(1) if match else "0"
+
+
 def _get_best_read_type_for_blob(species, asm_id):
     """Determine the best available read type for blobtools coverage."""
     try:
@@ -1284,7 +1305,8 @@ rule F06_create_blobdir:
             "decontamination", "blobtools", "{asm_basename}",
             "reads_mapped.bam"
         ),
-        taxdump_flag = os.path.join(TAXDUMP_DIR, "taxdump.done")
+        taxdump_flag = os.path.join(TAXDUMP_DIR, "taxdump.done"),
+        busco = get_blob_busco_archive
     output:
         flag = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
@@ -1300,7 +1322,9 @@ rule F06_create_blobdir:
         outdir      = lambda w: os.path.join(
             config["OUT_FOLDER"], "GEP2_results", w.species, w.asm_id,
             "decontamination", "blobtools", w.asm_basename
-        )
+        ),
+        busco_script = str(SCRIPTS_DIR / "busco_tables_for_blobtools.py"),
+        compleasm_version = get_compleasm_version()
     threads: cpu_func("create_blobdir")
     resources:
         mem_mb  = mem_func("create_blobdir"),
@@ -1341,7 +1365,7 @@ rule F06_create_blobdir:
 
         # Step 1: Create BlobDir from assembly FASTA
         echo ""
-        echo "[GEP2] Step 1/3: blobtools create (assembly -> GC + lengths)"
+        echo "[GEP2] Step 1/4: blobtools create (assembly -> GC + lengths)"
 
         blobtools create \
             --fasta {input.asm} \
@@ -1364,7 +1388,7 @@ print(records)
 
         # Step 2: Add diamond blastx hits (taxonomic assignment)
         echo ""
-        echo "[GEP2] Step 2/3: blobtools add --hits (taxonomic assignment)"
+        echo "[GEP2] Step 2/4: blobtools add --hits (taxonomic assignment)"
 
         NHITS=$(wc -l < {input.hits})
         echo "[GEP2] Diamond hits: $NHITS"
@@ -1384,7 +1408,7 @@ print(records)
 
         # Step 3: Add read coverage from BAM
         echo ""
-        echo "[GEP2] Step 3/3: blobtools add --cov (read coverage)"
+        echo "[GEP2] Step 3/4: blobtools add --cov (read coverage)"
 
         # Re-index BAM as CSI (blobtools prefers .csi over .bai)
         echo "[GEP2] Indexing BAM..."
@@ -1399,6 +1423,37 @@ print(records)
             {params.blobdir}
 
         echo "[GEP2] Coverage data added successfully"
+
+        # Step 4: Add compleasm/BUSCO full table(s) for the BUSCO ring of the snail plot.
+        # Non-fatal: without it the BlobDir and plots are still produced.
+        echo ""
+        echo "[GEP2] Step 4/4: blobtools add --busco (gene completeness)"
+
+        if [ -n "{input.busco}" ]; then
+            echo "[GEP2] Source: {input.busco}"
+            BUSCO_TMP="$(mktemp -d "{params.outdir}/busco_tables.XXXXXX")"
+            if BUSCO_TABLES="$(python3 {params.busco_script} {input.busco} "$BUSCO_TMP" {params.compleasm_version})"; then
+                [ -n "$BUSCO_TABLES" ] || echo "[GEP2] WARNING: no gene table found in {input.busco}"
+                SNAIL_RING=""
+                for TABLE in $BUSCO_TABLES; do
+                    # Show the start of the table exactly as blobtools reads it
+                    echo "[GEP2] Adding $(basename "$TABLE"):"
+                    head -n 4 "$TABLE" | cut -c1-120 | sed 's/^/[GEP2]   | /'
+                    if blobtools add --busco "$TABLE" {params.blobdir}; then
+                        [ -n "$SNAIL_RING" ] || SNAIL_RING="$(basename "$TABLE" _full_table.tsv)"
+                    else
+                        echo "[GEP2] WARNING: blobtools add --busco failed for $(basename "$TABLE") (non-fatal)"
+                    fi
+                done
+                # The first table added is the one shown in the snail plot
+                [ -z "$SNAIL_RING" ] || echo "[GEP2] Snail plot BUSCO ring: $SNAIL_RING"
+            else
+                echo "[GEP2] WARNING: could not read {input.busco} (non-fatal)"
+            fi
+            rm -rf "$BUSCO_TMP"
+        else
+            echo "[GEP2] RUN_COMPL is off - snail plot without BUSCO"
+        fi
 
         # Verify final BlobDir
         echo ""
