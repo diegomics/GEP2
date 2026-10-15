@@ -1,6 +1,6 @@
 # Container definitions for GEP2
 containers:
-  gep2_base: "docker://diegomics/gep2_base:0.4.1"
+  gep2_base: "docker://diegomics/gep2_base:0.4.2"
   compleasm: "docker://huangnengcsu/compleasm:v0.2.9"
   busco: "docker://ezlabgva/busco:v6.1.0_cv1"
   inspector: "docker://diegomics/inspector:1.3.1"

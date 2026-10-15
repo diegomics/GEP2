@@ -918,11 +918,16 @@ rule B07_nanoplot_long_reads:
 
         cd $TEMP_DIR
         
+        echo "[GEP2] NanoPlot runs on a random subsample of up to 250000 reads:"
+        echo "[GEP2] number of reads/bases in NanoStats.txt (and MultiQC) refer to the subsample"
         seqtk sample -s456 {input.reads} 250000 | gzip -c > subsample.fq.gz
         
         if NanoPlot -t {threads} --fastq subsample.fq.gz -o {output.dir} --tsv_stats; then
-            echo "NanoPlot completed successfully"
+            echo "[GEP2] NanoPlot completed successfully"
+        elif [ -s {output.dir}/NanoStats.txt ]; then
+            echo "[GEP2] WARNING: NanoPlot failed after writing NanoStats.txt (kept); some plots may be missing"
         else
+            echo "[GEP2] WARNING: NanoPlot failed before writing stats; writing a placeholder NanoStats.txt with zeros"
             cat > {output.dir}/NanoStats.txt << 'EOF'
 General summary:
 Number of reads:	0

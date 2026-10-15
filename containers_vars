@@ -1,6 +1,6 @@
 GEP2_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
-GEP2_VAR=$(echo -n "docker://diegomics/gep2_base:0.4.1" | md5sum | awk '{print $1}')
+GEP2_VAR=$(echo -n "docker://diegomics/gep2_base:0.4.2" | md5sum | awk '{print $1}')
 COMPL_VAR=$(echo -n "docker://huangnengcsu/compleasm:v0.2.9" | md5sum | awk '{print $1}')
 BUSCO_VAR=$(echo -n "docker://ezlabgva/busco:v6.1.0_cv1" | md5sum | awk '{print $1}')
 INSP_VAR=$(echo -n "docker://diegomics/inspector:1.3.1" | md5sum | awk '{print $1}')
