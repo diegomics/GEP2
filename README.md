@@ -265,7 +265,7 @@ GEP2_results/
 | [genomescope2](https://github.com/tbenavi1/genomescope2.0)        | 10.1038/s41467-020-14998-3     | 2.0.1   | docker://diegomics/gep2_base:0.4.2                           |
 | [gfastats](https://github.com/vgl-hub/gfastats)                   | 10.1093/bioinformatics/btac460 | 1.3.11  | docker://diegomics/gep2_base:0.4.2                           |
 | [hicexplorer](https://github.com/deeptools/HiCExplorer)           | 10.1093/gigascience/giac061    | 3.7.6   | docker://diegomics/hic_analysis:0.3                          |
-| [hifasm](https://github.com/chhylp123/hifiasm)                    | 10.1038/s41592-024-02269-8     | 0.25.0  | docker://diegomics/gep2_base:0.4.2                           |
+| [hifiasm](https://github.com/chhylp123/hifiasm)                   | 10.1038/s41592-024-02269-8     | 0.25.0  | docker://diegomics/gep2_base:0.4.2                           |
 | [inspector](https://github.com/Maggi-Chen/Inspector)              | 10.1186/s13059-021-02527-4     | 1.3.1   | docker://diegomics/inspector:1.3.1                           |
 | [longdust](https://github.com/lh3/longdust)                       | -                              | 1.4     | docker://diegomics/hic_analysis:0.2.1                        |
 | [merqury](https://github.com/marbl/merqury)                       | 10.1186/s13059-020-02134-9     | 1.3     | docker://diegomics/gep2_base:0.4.2                           |
