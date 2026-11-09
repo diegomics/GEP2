@@ -791,8 +791,8 @@ rule Z02_generate_super_report:
     container: CONTAINERS["gep2_base"]
     threads: 1
     resources:
-        mem_mb = 2000,
-        runtime = 15
+        mem_mb = 4000,
+        runtime = 90
     log:
         os.path.join(
             config["OUT_FOLDER"] , "GEP2_results", "logs", "Z02_generate_super_report.log"
