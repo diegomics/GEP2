@@ -654,13 +654,13 @@ rule C02_run_merqury_fk:
         if [ "$ASM_COUNT" -eq 1 ]; then
             ASM1=$(echo "$ASSEMBLIES" | awk '{{print $1}}')
             A1=$(link_assembly "$ASM1" "asm1")
-            MerquryFK -T{threads} -P"$TEMP_DIR" {input.kmer_db} "$A1" {params.prefix}
+            MerquryFK -k -T{threads} -P"$TEMP_DIR" {input.kmer_db} "$A1" {params.prefix}
         elif [ "$ASM_COUNT" -eq 2 ]; then
             ASM1=$(echo "$ASSEMBLIES" | awk '{{print $1}}')
             ASM2=$(echo "$ASSEMBLIES" | awk '{{print $2}}')
             A1=$(link_assembly "$ASM1" "asm1")
             A2=$(link_assembly "$ASM2" "asm2")
-            MerquryFK -T{threads} -P"$TEMP_DIR" {input.kmer_db} "$A1" "$A2" {params.prefix}
+            MerquryFK -k -T{threads} -P"$TEMP_DIR" {input.kmer_db} "$A1" "$A2" {params.prefix}
         else
             echo "[GEP2] ERROR: expected 1 or 2 assembly files, got $ASM_COUNT"; exit 1
         fi
