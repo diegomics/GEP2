@@ -1398,8 +1398,9 @@ rule E13_add_pretext_tracks:
             BASENAME=$(basename "$TRACK_FILE" .bedgraph)
             TRACK_NAME="${{TRACK_NAMES[$BASENAME]:-$BASENAME}}"
 
-            # Check if bedgraph has data (more than just header)
-            DATA_LINES=$(grep -v '^#' "$TRACK_FILE" | wc -l)
+            # Check if bedgraph has data (more than just header); grep exits 1 on an
+            # empty track (e.g. no telomere motif found), which would stop the job
+            DATA_LINES=$(grep -vc '^#' "$TRACK_FILE" || true)
 
             if [ "$DATA_LINES" -eq 0 ]; then
                 echo "[GEP2] Track $TRACK_NAME has no data, skipping"
