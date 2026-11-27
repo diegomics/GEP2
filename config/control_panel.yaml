@@ -169,7 +169,7 @@ SKIP_BLOB: off
 ## Options: "quick" (uses SwissProt and fast mode, rough overview), "standard" (uses SwissProt and
 ## sensitive mode, good overview), "thorough" (uses Ref Proteomes and fast mode, comprehensive),
 ## "full" (uses Ref Proteomes and sensitive mode, most detailed)
-### SwissProt DB is ~1 GB (~2 GB during build), while Ref Proteomes is ~50 GB (~1 TB during build)
+### SwissProt DB is <1 GB (also during build), while Ref Proteomes is ~50-70 GB (~500 GB during build)
 ### Caution: "thorough" and "full" options are VERY VERY SERIOUSLY SLOW!!!
 DIAMOND_MODE: quick
 

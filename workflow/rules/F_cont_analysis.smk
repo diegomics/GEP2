@@ -735,7 +735,7 @@ rule F03_build_uniprot_diamond_db:
             rm -f "$FASTA" "$TAXMAP"
 
         # -------------------------------------------------------------------
-        # Reference Proteomes path  (~30-50 GB download, ~30-50 GB Diamond DB)
+        # Reference Proteomes path  (~200 GB download, ~500 GB disk during the build)
         # Following the official BlobToolKit recipe:
         #   https://blobtoolkit.genomehubs.org/install/
         # -------------------------------------------------------------------

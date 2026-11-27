@@ -267,7 +267,7 @@ GEP2_results/
 | [bwa-mem2](https://github.com/bwa-mem2/bwa-mem2)                  | 10.1109/IPDPS.2019.00041       | 2.3     | docker://diegomics/hic_analysis:0.2.2                        |
 | [chromap](https://github.com/haowenz/chromap)                     | 10.1038/s41467-021-26865-w     | 0.3.2   | docker://diegomics/hic_analysis:0.2.2                        |
 | [cooler](https://github.com/open2c/cooler)                        | 10.1093/bioinformatics/btz540  | 0.11.0  | docker://diegomics/hic_analysis:0.2.2                        |
-| [compleasm](https://github.com/huangnengCSU/compleasm)            | 10.1093/bioinformatics/btad595 | 0.2.10  | docker://huangnengcsu/compleasm:v0.2.10                      |
+| [compleasm](https://github.com/huangnengCSU/compleasm)            | 10.1093/bioinformatics/btad595 | 0.2.9   | docker://huangnengcsu/compleasm:v0.2.9                       |
 | [diamond](https://github.com/bbuchfink/diamond)                   | 10.1038/s41592-021-01101-x     | 2.2.9   | docker://diegomics/hic_analysis:0.2.2                        |
 | [enabrowsertools](https://github.com/enasequence/enaBrowserTools) | -                              | 1.7.2   | docker://diegomics/gep2_base:0.4.3                           |
 | [fastp](https://github.com/OpenGene/fastp)                        | 10.1093/bioinformatics/bty560  | 1.4.0   | docker://diegomics/gep2_base:0.4.3                           |
