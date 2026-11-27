@@ -936,12 +936,11 @@ def format_number(value):
         if isinstance(value, float):
             if value != value or value in (float("inf"), float("-inf")):
                 return str(value)          # nan/inf (e.g. Merqury QV with no errors)
-            if value < 10:
-                return f"{value:.4f}"
-            elif value < 100:
+            if value == 0:
+                return "0"
+            if value < 100:
                 return f"{value:.2f}"
-            else:
-                return f"{int(value):,}"
+            return f"{int(value):,}"
         return f"{value:,}"
     return str(value)
 
@@ -1628,7 +1627,9 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, bu
             ratings = ['····'] * num_assemblies
         else:
             ratings = [get_rating(v, 'merqury_completeness') for v in merqury_completeness_values]
-        add_metric(f"{kmer_tool} Compl.", merqury_completeness_values, ratings)
+        add_metric(f"{kmer_tool} Compl.",
+                   [None if v is None else f"{format_number(v)}%" for v in merqury_completeness_values],
+                   ratings)
 
     # K-mer false duplications (Merqury's false_duplications.sh method)
     if kmer_false_dup and any(v is not None for v in kmer_false_dup):
@@ -1768,7 +1769,7 @@ def generate_report(species_name, assembly_id, gfastats_list, compleasm_list, bu
         report_lines.append(f"{kmer_tool} QV for both: {format_number(both_qv)} "
                             f"`{get_rating(both_qv, 'merqury_qv')}`<br>")
     if both_compl is not None:
-        report_lines.append(f"{kmer_tool} Compl. for both: {format_number(both_compl)} "
+        report_lines.append(f"{kmer_tool} Compl. for both: {format_number(both_compl)}% "
                             f"`{get_rating(both_compl, 'merqury_completeness')}`<br>")
 
     # Add GenomeScope2 section if plot exists
