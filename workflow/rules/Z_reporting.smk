@@ -170,9 +170,16 @@ def get_report_hic_inputs(wildcards):
 
         results.extend([
             os.path.join(hic_dir, f"{asm_basename}.pretext"),
-            os.path.join(hic_dir, f"{asm_basename}.pairtools_stats.txt"),
+            os.path.join(hic_dir, f"{asm_basename}.pairtools_dedup_stats.txt"),
             os.path.join(hic_dir, f"{asm_basename}.chromap_stats.log")
         ])
+
+    # Per-library check (dedup stats + chromap log of each 1M/10M subset), and each
+    # library's read count for its full depth
+    for stats in get_hic_library_qc_stats(wildcards.species, wildcards.asm_id):
+        results.extend([stats, stats.replace(".dedup_stats.txt", ".chromap.log")])
+    for arg in get_hic_library_count_args(wildcards.species, wildcards.asm_id):
+        results.append(arg.split("=", 1)[1])
 
     return results
 
@@ -204,7 +211,7 @@ def get_report_pairtools_stats(wildcards):
             config["OUT_FOLDER"], "GEP2_results", wildcards.species,
             wildcards.asm_id, "hic", asm_basename
         )
-        results.append(os.path.join(hic_dir, f"{asm_basename}.pairtools_stats.txt"))
+        results.append(os.path.join(hic_dir, f"{asm_basename}.pairtools_dedup_stats.txt"))
 
     return results
 
@@ -438,14 +445,24 @@ def get_ear_busco_summary_inputs(wildcards):
     return summaries
 
 
-def get_all_ear_inputs(wildcards):
-    """Collect the hard inputs for the EAR rule (mirrors get_all_report_inputs).
+def get_ear_read_count_args(wildcards):
+    """'<read_type>=<counts file>' for every read file of this assembly, so the EAR
+    DATA lines add up only this assembly's reads (helpers in B_proc_reads.smk)."""
+    files_by_type = _effective_read_files_for_assembly(wildcards.species, wildcards.asm_id)
+    return [
+        f"{read_type}={_read_count_file(wildcards.species, read_type, f)}"
+        for read_type, files in files_by_type.items()
+        for f in files
+    ]
 
-    Each helper already returns [] when its analysis is disabled/skipped, so a
-    disabled analysis simply adds no dependency and the script leaves that field's
-    placeholder in place. FCS-GX is intentionally NOT a hard input (its report file
-    may be absent); it is passed as a directory param and globbed at runtime, exactly
-    as the markdown report does."""
+
+def get_ear_read_count_inputs(wildcards):
+    return [arg.split("=", 1)[1] for arg in get_ear_read_count_args(wildcards)]
+
+
+def get_all_ear_inputs(wildcards):
+    """Hard inputs of the EAR rule (as get_all_report_inputs): disabled analyses add
+    nothing; FCS-GX is globbed at runtime, as its report may be absent."""
     inputs = []
 
     # gfastats - always present (backbone; defines the haplotype count)
@@ -465,6 +482,9 @@ def get_all_ear_inputs(wildcards):
     # blobtools sentinel (if RUN_BLOB and reads available)
     inputs.extend(get_blobplot_inputs(wildcards))
 
+    # Read base counts of this assembly's reads (DATA), if it lists any reads
+    inputs.extend(get_ear_read_count_inputs(wildcards))
+
     return inputs
 
 def get_all_markdown_files(wildcards):
@@ -483,19 +503,17 @@ def get_all_markdown_files(wildcards):
 
 
 def get_version_footer():
-    """Pipeline + container version footer appended to each assembly report.
+    """Pipeline + container version lines for each assembly report. The report script
+    prints them in the closing code block, above the '#Scores legend'.
     Pulls GEP2_VER and CONTAINERS (both parsed once at workflow load time
     from workflow/envs/containers.yaml)"""
     container_versions = "|".join(
         f"{name}:{uri.rsplit(':', 1)[-1]}" for name, uri in CONTAINERS.items()
     )
     return (
-        "\n<br>\n<br>\n\n"
-        "```\n"
         "#Pipeline and containers version\n"
         f"GEP2:{GEP2_VER}\n"
-        f"{container_versions}\n"
-        "```\n"
+        f"{container_versions}"
     )
 
 # -------------------------------------------------------------------------------
@@ -526,6 +544,8 @@ rule Z00_generate_report:
         inspector = lambda w: get_report_inspector_inputs(w),
         pairtools_stats = lambda w: get_report_pairtools_stats(w),
         chromap_log = lambda w: get_report_chromap_log(w),
+        hic_library_stats = lambda w: get_hic_library_qc_stats(w.species, w.asm_id),
+        hic_library_counts = lambda w: get_hic_library_count_args(w.species, w.asm_id),
         hic_snapshots = lambda w: get_report_hic_snapshots(w),
         blobplots = lambda w: get_blobplot_dirs(w),
         fcs_gx_dirs = lambda w: get_report_fcs_dirs(w),
@@ -559,16 +579,23 @@ rule Z00_generate_report:
         if [ -n "$BUSCO_SUMMARIES" ]; then
             cmd="$cmd --busco-summary $BUSCO_SUMMARIES"
         else
-            # Compleasm: extract full_table.tsv from tar.gz files
+            # Compleasm: only full_table.tsv; with LINEAGE: auto, the specific lineage's table,
+            # not eukaryota's (as make_EAR.py)
             COMPLEASM_FULLS=""
             for targz in {params.compleasm}; do
                 if [ -n "$targz" ]; then
                     extract_dir=$(dirname "$targz")
-                    tar -xzf "$targz" -C "$extract_dir"
-                    full_table=$(find "$extract_dir" -name "full_table.tsv" -path "*_odb*" | head -1)
+                    tar -xzf "$targz" -C "$extract_dir" --wildcards '*_odb*/full_table.tsv' \
+                        || echo "[GEP2] No full_table.tsv in $targz"
+                    ALL_FULLS=$(find "$extract_dir" -name "full_table.tsv" -path "*_odb*" | sort)
+                    full_table=$(echo "$ALL_FULLS" | grep -v '/eukaryota_odb[^/]*/full_table.tsv$' | head -1 || true)
+                    [ -z "$full_table" ] && full_table=$(echo "$ALL_FULLS" | head -1)
+                    for ft in $ALL_FULLS; do
+                        COMPLEASM_CLEANUP="$COMPLEASM_CLEANUP $(dirname "$ft")"
+                    done
                     if [ -n "$full_table" ]; then
+                        echo "[GEP2] compleasm table for the report: $full_table"
                         COMPLEASM_FULLS="$COMPLEASM_FULLS $full_table"
-                        COMPLEASM_CLEANUP="$COMPLEASM_CLEANUP $(dirname "$full_table")"
                     fi
                 fi
             done
@@ -604,6 +631,14 @@ rule Z00_generate_report:
 
         if [ -n "{params.chromap_log}" ]; then
             cmd="$cmd --chromap-log {params.chromap_log}"
+        fi
+
+        if [ -n "{params.hic_library_stats}" ]; then
+            cmd="$cmd --hic-library-stats {params.hic_library_stats}"
+        fi
+
+        if [ -n "{params.hic_library_counts}" ]; then
+            cmd="$cmd --hic-library-counts {params.hic_library_counts}"
         fi
 
         # Hi-C snapshots are optional - only add files that actually exist
@@ -653,15 +688,18 @@ rule Z00_generate_report:
             cmd="$cmd --fcs-gx $FCS_GX_FILES"
         fi
 
+        # Versions, printed by the script in the closing block with the scores legend
+        VERSIONS_FILE="{output.report}.versions.txt"
+        trap 'rm -f "$VERSIONS_FILE"' EXIT          # also when the report script fails
+        cat > "$VERSIONS_FILE" <<'GEP2_VERSION_EOF'
+{params.version_block}
+GEP2_VERSION_EOF
+        cmd="$cmd --versions-file $VERSIONS_FILE"
+
         cmd="$cmd -o {output.report}"
 
         echo "[GEP2] Command: $cmd"
         $cmd
-
-        # Append pipeline/container version footer (transparency/reproducibility)
-        cat >> {output.report} <<'GEP2_VERSION_EOF'
-{params.version_block}
-GEP2_VERSION_EOF
 
         # Cleanup extracted compleasm directories
         for cleanup_dir in $COMPLEASM_CLEANUP; do
@@ -732,6 +770,7 @@ rule Z01_generate_ear_yaml:
         ),
         fcs_dirs = lambda w: get_report_fcs_dirs(w),
         blob_dirs = lambda w: get_blobplot_dirs(w),
+        read_counts = lambda w: get_ear_read_count_args(w),
         script_path = str(SCRIPTS_DIR / "make_ear_template.py")
     container: CONTAINERS["gep2_base"]
     threads: 1
@@ -767,6 +806,10 @@ rule Z01_generate_ear_yaml:
 
         if [ -n "{params.blob_dirs}" ]; then
             cmd="$cmd --blob-dir {params.blob_dirs}"
+        fi
+
+        if [ -n "{params.read_counts}" ]; then
+            cmd="$cmd --read-counts {params.read_counts}"
         fi
 
         cmd="$cmd -o {output.ear}"

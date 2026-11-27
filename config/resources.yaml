@@ -60,11 +60,22 @@ compression_ratios:
 
 # Resource calculation rules for each tool
 resources:
-  # Download data
+  # Downloads: reads, assemblies, taxdump, BUSCO/compleasm lineages, FCS-GX database
   download_data:
     max_cpu: 2
     mem_gb: 8
     runtime_min: 2880                       # 48h
+
+  # Kraken2 core_nt
+  kraken_db_download:
+    max_cpu: 4
+    mem_gb: 4
+    runtime_min: 2880                       # 48h: up to 3 x 12h download attempts + md5 + unpack
+
+  kraken_classify:
+    max_cpu: 16
+    mem_gb: 360
+    runtime_min: 480                        # 8h
 
   # Assembly statistics tools
   gfastats:
@@ -110,7 +121,6 @@ resources:
     runtime_min_per_uncompressed_gb: 10
     base_runtime_min: 240                   # 4h
 
-
   # Kmer tools
   kmer_count:
     max_cpu: 12
@@ -154,6 +164,28 @@ resources:
     runtime_min_per_uncompressed_gb: 5
     base_runtime_min: 240                   # 4h
 
+  # pairtools sort + dedup of the chromap pairs
+  hic_dedup:
+    max_cpu: 8
+    mem_gb: 12                              # half for the sort buffer, half for dedup
+    runtime_min_per_uncompressed_gb: 3
+    base_runtime_min: 60                    # 1h
+
+  # seqtk sample
+  subsample_reads:
+    max_cpu: 2
+    mem_gb: 2
+    runtime_min_per_uncompressed_gb: 1
+    base_runtime_min: 30
+
+  # chromap on a 1M/10M-pair subset + dedup
+  hic_qc_map:
+    max_cpu: 8
+    mem_gb_per_uncompressed_gb: 0.2
+    base_mem_gb: 24
+    runtime_min_per_uncompressed_gb: 2
+    base_runtime_min: 60                    # 1h
+
   pretext_map:
     max_cpu: 4
     mem_gb_per_uncompressed_gb: 0.3
@@ -184,14 +216,6 @@ resources:
     runtime_min_per_uncompressed_gb: 30
     base_runtime_min: 240                   # 4h
 
-  markdup:
-    max_cpu: 8
-    mem_gb_per_uncompressed_gb: 2.0
-    base_mem_gb: 12
-    runtime_min_per_uncompressed_gb: 30
-    base_runtime_min: 240                   # 4h
-
-
   # Decontamination tools
   fcs_gx:
     max_cpu: 24
@@ -211,8 +235,7 @@ resources:
 
   diamond_blastx:
     max_cpu: 16
-    base_mem_gb: 20
-    mem_gb_per_uncompressed_gb: 48
+    mem_gb: 64
     runtime_min: 2880                       # 48h
 
   create_blobdir:
@@ -226,11 +249,6 @@ resources:
     runtime_min: 90
 
   # Lightweight tools
-  samtools_index:
-    max_cpu: 2
-    mem_gb: 6
-    runtime_min: 2880                       # 48h
-
   compress_reads:
     max_cpu: 6
     mem_gb: 3
@@ -240,3 +258,10 @@ resources:
     max_cpu: 1
     mem_gb: 1
     runtime_min: 90
+
+  # seqtk size
+  count_bases:
+    max_cpu: 1
+    mem_gb: 2
+    base_runtime_min: 60
+    runtime_min_per_uncompressed_gb: 0.5

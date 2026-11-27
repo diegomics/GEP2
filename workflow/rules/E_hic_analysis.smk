@@ -5,12 +5,14 @@
 # Workflow:
 #   1. chromap index      -> index assembly
 #   2. chromap map        -> .pairs file
-#   3. pairtools stats    -> stats from .pairs
+#   3. pairtools sort + dedup -> duplicate-marked stats from .pairs (pairs left as they are)
 #   4. genome file        -> scaffold sizes for cooler
 #   5. cooler cload pairs -> .cool file
 #   6. cooler zoomify     -> .mcool file
 #   7. pairtools split    -> .bam from .pairs
 #   8. PretextMap         -> .pretext from .bam
+#  14. seqtk sample       -> 1M/10M random read-pair subsets per Hi-C library
+#  15. chromap + dedup    -> per-library check on the subsets (mapped to asm1)
 #
 # Note: The following are defined in the main Snakefile:
 #   - samples_config: Parsed sample configuration
@@ -50,13 +52,16 @@ def _has_hic_reads_for_assembly(species, asm_id):
         return False
 
 
-def _get_hic_reads_for_assembly(species, asm_id):
-    """Get all Hi-C read files for this assembly.
+# Hi-C QC: pairtools dedup on chromap's pairs (those kept at HIC_MAPQ); per library,
+# random read-pair subsets (the smaller drawn from the larger) mapped to asm1 (E14/E15)
+HIC_QC_DEPTHS = {"10M": 10_000_000, "1M": 1_000_000}   # largest first
+HIC_QC_SEED = 42
 
-    Returns dict with 'r1' and 'r2' lists of file paths.
-    """
-    r1_files = []
-    r2_files = []
+
+def _get_hic_libraries_for_assembly(species, asm_id):
+    """Hi-C libraries in mapping order, one per PathN: [{'lib', 'r1', 'r2'}], with the
+    same (processed or raw) files E01 maps."""
+    libraries = []
 
     try:
         asm_data = samples_config["sp_name"][species]["asm_id"][asm_id]
@@ -120,15 +125,108 @@ def _get_hic_reads_for_assembly(species, asm_id):
                         r1_path = os.path.join(base_dir, f"hic_Path{idx}_{base}_1.fq.gz")
                         r2_path = os.path.join(base_dir, f"hic_Path{idx}_{base}_2.fq.gz")
 
-                    if r1_path not in r1_files:
-                        r1_files.append(r1_path)
-                    if r2_path not in r2_files:
-                        r2_files.append(r2_path)
+                    lib = f"hic_Path{idx}_{base}"
+                    if all(l["lib"] != lib for l in libraries):
+                        libraries.append({"lib": lib, "r1": r1_path, "r2": r2_path})
 
     except (KeyError, TypeError, AttributeError):
         pass
 
+    return libraries
+
+
+def _get_hic_reads_for_assembly(species, asm_id):
+    """Get all Hi-C read files for this assembly.
+
+    Returns dict with 'r1' and 'r2' lists of file paths.
+    """
+    r1_files = []
+    r2_files = []
+    for library in _get_hic_libraries_for_assembly(species, asm_id):
+        if library["r1"] not in r1_files:
+            r1_files.append(library["r1"])
+        if library["r2"] not in r2_files:
+            r2_files.append(library["r2"])
     return {"r1": r1_files, "r2": r2_files}
+
+
+def _get_hic_library_files(species, lib):
+    """(r1, r2) of a Hi-C library, looked up across the entries of the species."""
+    try:
+        asm_ids = list(samples_config["sp_name"][species]["asm_id"])
+    except (KeyError, TypeError):
+        asm_ids = []
+    for asm_id in asm_ids:
+        for library in _get_hic_libraries_for_assembly(species, asm_id):
+            if library["lib"] == lib:
+                return library["r1"], library["r2"]
+    raise ValueError(f"[GEP2] Hi-C library {lib} not found for {species}")
+
+
+def _hic_qc_reference(species, asm_id):
+    """(basename, path) of the assembly the library check maps to: the first one, in
+    the same sorted order as the report columns (asm1)."""
+    asm_files = get_assembly_files(species, asm_id)
+    for asm_key, asm_path in sorted(asm_files.items()):
+        if asm_path and asm_path != "None":
+            return get_assembly_basename(asm_path), asm_path
+    return None, None
+
+
+def get_hic_library_qc_stats(species, asm_id):
+    """Per-library dedup stats files (each with a .chromap.log beside it) for the report,
+    library by library, largest depth first."""
+    if not _should_run_hic(species, asm_id):
+        return []
+    out_dir = os.path.join(config["OUT_FOLDER"], "GEP2_results", species, asm_id,
+                           "hic", "library_qc")
+    return [
+        os.path.join(out_dir, f"{library['lib']}.{depth}.dedup_stats.txt")
+        for library in _get_hic_libraries_for_assembly(species, asm_id)
+        for depth in HIC_QC_DEPTHS
+    ]
+
+
+def get_hic_library_count_args(species, asm_id):
+    """'<library>=<R1 read counts file>' per Hi-C library of this assembly, so the report
+    knows each library's full depth (B09's seqtk size table of the R1 file E01 maps)."""
+    if not _should_run_hic(species, asm_id):
+        return []
+    return [
+        f"{library['lib']}={_read_count_file(species, 'hic', library['r1'])}"
+        for library in _get_hic_libraries_for_assembly(species, asm_id)
+    ]
+
+
+def _get_hic_qc_subsample_input(w):
+    """E14: the largest subset is drawn from the library's files, every smaller one from
+    the next larger subset."""
+    depths = list(HIC_QC_DEPTHS)
+    pos = depths.index(w.depth)
+    if pos == 0:
+        r1, r2 = _get_hic_library_files(w.species, w.lib)
+        return {"r1": r1, "r2": r2}
+    subset_dir = os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", w.species,
+                              "reads", "hic", "qc_subsets")
+    larger = depths[pos - 1]
+    return {"r1": os.path.join(subset_dir, f"{w.lib}.{larger}_1.fq.gz"),
+            "r2": os.path.join(subset_dir, f"{w.lib}.{larger}_2.fq.gz")}
+
+
+def _get_hic_qc_map_input(w):
+    """E15: the reference assembly (asm1), its chromap index and the library subset."""
+    basename, asm_path = _hic_qc_reference(w.species, w.asm_id)
+    if basename is None:
+        return {}
+    subset_dir = os.path.join(config["OUT_FOLDER"], "GEP2_results", "data", w.species,
+                              "reads", "hic", "qc_subsets")
+    return {
+        "asm": get_assembly_input_for_basename(w, basename),
+        "index": os.path.join(config["OUT_FOLDER"], "GEP2_results", w.species, w.asm_id,
+                              "hic", basename, "chromap_index.index"),
+        "r1": os.path.join(subset_dir, f"{w.lib}.{w.depth}_1.fq.gz"),
+        "r2": os.path.join(subset_dir, f"{w.lib}.{w.depth}_2.fq.gz"),
+    }
 
 
 def _should_run_hic(species, asm_id):
@@ -507,7 +605,9 @@ rule E01_chromap_map:
 
 
 rule E02_pairtools_stats:
-    """Generate statistics from .pairs file."""
+    """Mark PCR/optical duplicates in the chromap pairs and write their statistics
+    (duplicate rate, complexity, cis/trans and cis distances on the non-duplicates).
+    The pairs file itself is left as it is for the maps."""
     input:
         pairs = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
@@ -516,12 +616,12 @@ rule E02_pairtools_stats:
     output:
         stats = os.path.join(
             config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
-            "hic", "{asm_basename}", "{asm_basename}.pairtools_stats.txt"
+            "hic", "{asm_basename}", "{asm_basename}.pairtools_dedup_stats.txt"
         )
-    threads: cpu_func("light_task")
+    threads: cpu_func("hic_dedup")
     resources:
-        mem_mb = mem_func("light_task"),
-        runtime = time_func("light_task")
+        mem_mb = mem_func("hic_dedup"),
+        runtime = time_func("hic_dedup")
     container: CONTAINERS["hic_analysis"]
     log:
         os.path.join(
@@ -533,11 +633,20 @@ rule E02_pairtools_stats:
         set -euo pipefail
         exec > {log} 2>&1
 
-        echo "[GEP2] Running pairtools stats for {wildcards.asm_basename}"
+        echo "[GEP2] Duplicate marking and pairtools stats for {wildcards.asm_basename}"
 
-        pairtools stats {input.pairs} -o {output.stats}
+        WORK_DIR="$(gep2_get_workdir 100)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_hicdedup_{wildcards.species}_{wildcards.asm_basename}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
 
-        echo "[GEP2] Pairtools stats completed"
+        # chromap output is already sorted but not flagged as such; sort anyway to be safe.
+        # Sort buffer: half the job's memory, the rest for dedup.
+        pairtools sort --nproc {threads} --memory "$(( {resources.mem_mb} / 2 ))M" \
+                --tmpdir "$TEMP_DIR" {input.pairs} \
+            | pairtools dedup --mark-dups --output-stats {output.stats} -o /dev/null
+
+        grep -E "^(total|total_dups|total_nodups|cis|trans|summary/frac_dups|summary/complexity_naive)[[:space:]]" {output.stats} || true
+        echo "[GEP2] Pairtools dedup stats completed"
         """
 
 
@@ -1319,4 +1428,125 @@ rule E13_add_pretext_tracks:
         echo ""
         echo "[GEP2] All tracks added to pretext"
         ls -lh {output.pretext}
+        """
+
+
+# -------------------------------------------------------------------------------
+# RULES - Per-library Hi-C check (random subsets, see HIC_QC_DEPTHS)
+# -------------------------------------------------------------------------------
+
+rule E14_hic_qc_subsample:
+    """Random read-pair subset of one Hi-C library (seqtk sample, 2-pass: keeps only the
+    chosen record indices in memory). R1 and R2 get the same seed, so the same pairs are
+    kept in both files; this is checked by comparing all read names. A library with fewer
+    pairs than asked for is taken whole."""
+    input:
+        unpack(_get_hic_qc_subsample_input)
+    output:
+        r1 = temp(os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "hic", "qc_subsets", "{lib}.{depth}_1.fq.gz"
+        )),
+        r2 = temp(os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "hic", "qc_subsets", "{lib}.{depth}_2.fq.gz"
+        ))
+    wildcard_constraints:
+        lib = r"hic_Path\d+_[^/]+",
+        depth = "|".join(HIC_QC_DEPTHS)
+    params:
+        n_pairs = lambda w: HIC_QC_DEPTHS[w.depth],
+        seed = HIC_QC_SEED
+    threads: cpu_func("subsample_reads")
+    resources:
+        mem_mb = mem_func("subsample_reads"),
+        runtime = time_func("subsample_reads")
+    container: CONTAINERS["gep2_base"]
+    log:
+        os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "data", "{species}",
+            "reads", "hic", "logs", "E14_hic_qc_subsample.{lib}.{depth}.log"
+        )
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
+
+        echo "[GEP2] Hi-C library {wildcards.lib}: random subset of {params.n_pairs} pairs (seed {params.seed})"
+        seqtk sample -2 -s{params.seed} {input.r1} {params.n_pairs} | pigz -p {threads} > {output.r1}
+        seqtk sample -2 -s{params.seed} {input.r2} {params.n_pairs} | pigz -p {threads} > {output.r2}
+
+        # R1 and R2 must hold the same pairs, in the same order (names compared without /1 /2)
+        names() {{ seqtk seq "$1" | awk 'NR%4==1 {{n = substr($1, 2); sub(/\\/[12]$/, "", n); print n}}'; }}
+        read -r N_PAIRS N_BAD < <(paste <(names {output.r1}) <(names {output.r2}) \\
+            | awk '{{n++; if ($1 != $2) bad++}} END {{print n+0, bad+0}}')
+        echo "[GEP2] Pairs in subset: $N_PAIRS; R1/R2 name mismatches: $N_BAD"
+        if [ "$N_PAIRS" -eq 0 ]; then
+            echo "[GEP2] ERROR: empty subset"; exit 1
+        fi
+        if [ "$N_BAD" -gt 0 ]; then
+            echo "[GEP2] WARNING: R1 and R2 of {wildcards.lib} are not paired record by record" \\
+                 "($N_BAD of $N_PAIRS names differ): check the input files"
+        fi
+        """
+
+
+rule E15_hic_qc_map:
+    """Map one library subset to the first assembly with chromap (same settings as E01)
+    and mark duplicates as E02 does."""
+    input:
+        unpack(_get_hic_qc_map_input)
+    output:
+        chromap_log = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+            "hic", "library_qc", "{lib}.{depth}.chromap.log"
+        ),
+        stats = os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+            "hic", "library_qc", "{lib}.{depth}.dedup_stats.txt"
+        )
+    wildcard_constraints:
+        lib = r"hic_Path\d+_[^/]+",
+        depth = "|".join(HIC_QC_DEPTHS)
+    params:
+        mapq = config.get("HIC_MAPQ", 0)
+    threads: cpu_func("hic_qc_map")
+    resources:
+        mem_mb = mem_func("hic_qc_map"),
+        runtime = time_func("hic_qc_map")
+    container: CONTAINERS["hic_analysis"]
+    log:
+        os.path.join(
+            config["OUT_FOLDER"], "GEP2_results", "{species}", "{asm_id}",
+            "logs", "E15_hic_qc_map.{lib}.{depth}.log"
+        )
+    shell:
+        """
+        set -euo pipefail
+        exec > {log} 2>&1
+
+        echo "[GEP2] Hi-C library check {wildcards.lib} ({wildcards.depth}) on {input.asm}"
+
+        WORK_DIR="$(gep2_get_workdir 20)"
+        TEMP_DIR="$(mktemp -d "$WORK_DIR/GEP2_hicqc_{wildcards.species}_{wildcards.lib}_{wildcards.depth}_XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+
+        chromap --preset hic \\
+            -q {params.mapq} \\
+            -x {input.index} \\
+            -r {input.asm} \\
+            -1 {input.r1} \\
+            -2 {input.r2} \\
+            -t {threads} \\
+            --pairs \\
+            -o "$TEMP_DIR/qc.pairs" \\
+            > "$TEMP_DIR/chromap.log" 2>&1
+        cp "$TEMP_DIR/chromap.log" {output.chromap_log}
+
+        # sort + dedup as in E02 (same sort buffer: half the job's memory)
+        pairtools sort --nproc {threads} --memory "$(( {resources.mem_mb} / 2 ))M" \\
+                --tmpdir "$TEMP_DIR" "$TEMP_DIR/qc.pairs" \\
+            | pairtools dedup --mark-dups --output-stats {output.stats} -o /dev/null
+
+        echo "[GEP2] Library check done"
         """

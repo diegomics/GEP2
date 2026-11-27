@@ -1,0 +1,29 @@
+# MultiQC settings for GEP2's read-QC reports (B08, one report per read type)
+
+# Sections in the order the reads go through GEP2: Higher = earlier;
+# ids that are not in a report are ignored.
+report_section_order:
+  gep2_read_bases_hic: {order: 1000}         # files and bases used by the analyses
+  gep2_read_bases_illumina: {order: 1000}
+  gep2_read_bases_10x: {order: 1000}
+  gep2_read_bases_hifi: {order: 1000}
+  gep2_read_bases_ont: {order: 1000}
+  fastqc: {order: 900}                       # raw reads
+  fastp: {order: 800}                        # processing: PE trimming (before/after)
+  bbmap: {order: 790}                        # processing: HiFi adapter filter (bbduk stats=)
+  bbduk: {order: 780}
+  nanostat: {order: 770}                     # NanoPlot of the long reads used
+  gep2_kraken2_screen_table: {order: 700}    # Kraken2 read screen
+  kraken: {order: 690}
+
+# One-line notes on what each section looks at
+section_comments:
+  fastqc: "Raw reads (before any processing), on a random subset of 250,000 reads per file: counts refer to the subset."
+  nanostat: "Reads used by the analyses (processed when this read type's processing is on, raw otherwise), on a random subset of 250,000 reads: read and base numbers refer to the subset."
+
+# Kraken's own top-species columns: GEP2's Kraken2 columns say it per group (target
+# order, other eukaryotes, bacteria, human). Still available under 'Configure columns'.
+table_columns_visible:
+  kraken:
+    pct_top_one: false
+    pct_top_n: false

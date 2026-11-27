@@ -1,7 +1,7 @@
 # GEP2 - Genome Evaluation Pipeline 2
 # by Diego De Panis, 2025
 # note: AI tools may have been used to improve, clean and/or comment this version of the code
-GEP2_VER = "0.8.1"
+GEP2_VER = "0.9"
 
 # Debug verbosity (set to True for detailed DAG building messages)
 VERBOSE = False
@@ -67,6 +67,7 @@ BUSCO_DOWNLOAD_DIR = os.path.join(DB_FOLDER, "busco_downloads")
 FCS_GX_DIR = os.path.join(DB_FOLDER, "fcs_gx")
 TAXDUMP_DIR = os.path.join(DB_FOLDER, "taxdump")
 UNIPROT_DIR     = os.path.join(DB_FOLDER, "uniprot")
+KRAKEN_DB_DIR = os.path.join(DB_FOLDER, "kraken2", "core_nt")
 
 # OrthoDB version used for gene completeness (same for compleasm and BUSCO)
 ODB_VERSION = "odb12.2"
@@ -259,20 +260,7 @@ def get_assembly_basename(filepath):
 
 
 def _should_skip_analysis(species, asm_id, analysis_type):
-    """Check if analysis should be skipped for this assembly.
-
-    Logic:
-        - If assembly has skip=on in table AND config has SKIP_{analysis}=on -> skip
-        - Otherwise -> run
-
-    Args:
-        species: Species name
-        asm_id: Assembly identifier
-        analysis_type: 'kmer', 'compl', etc. (matches SKIP_{TYPE} in config)
-
-    Returns:
-        True if analysis should be skipped, False otherwise
-    """
+    """True when the assembly has skip=on in the table and SKIP_<analysis_type> is on."""
     # Check if assembly is flagged for selective skipping
     try:
         asm_data = samples_config["sp_name"][species]["asm_id"][asm_id]
@@ -391,6 +379,104 @@ if os.path.exists(manifest_path):
                 DOWNLOAD_MANIFEST_DICT[entry["destination"]] = entry
 
 
+# ADAPTERS_PE: what fastp trims from short paired-end reads (Illumina, 10x, Hi-C) on
+# top of its overlap analysis
+_ADAPTERS_PE_KEYWORDS = ("illumina", "auto", "overlap")
+ILLUMINA_PE_ADAPTERS_FA = str(SCRIPTS_DIR / "adapters_pe_illumina.fa")
+_FASTA_EXTS = (".fa", ".fasta", ".fna", ".fas")
+
+
+def _adapter_fasta_problem(path):
+    """Why fastp can't use this adapter FASTA as intended, or None. fastp quietly
+    misreads blank lines between entries (merges adapters) and indented lines, and
+    skips adapters under 6 bp; blank lines at the end are harmless."""
+    if path.lower().endswith((".gz", ".bgz", ".bz2", ".xz", ".zip")):
+        return "the adapter FASTA must be uncompressed (fastp reads it as plain text)"
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            lines = fh.read().split("\n")
+    except (OSError, UnicodeDecodeError) as e:
+        return f"cannot read {path}: {e}"
+    while lines and not lines[-1].strip():
+        lines.pop()                         # blank lines at the end of the file
+    entries, header, seq = [], None, []
+    for num, raw in enumerate(lines, 1):
+        line = raw.rstrip("\r")
+        if header is None and not line.strip():
+            continue                        # fastp skips everything before the first '>'
+        if line.startswith(">"):
+            if header is not None:
+                entries.append((header, "".join(seq)))
+            header, seq = line[1:].strip(), []
+        elif header is None:
+            return f"{path} is not a FASTA file (it must start with a '>' header line)"
+        elif not line.strip():
+            return (f"{path} has a blank line (line {num}): fastp would merge the lines "
+                    f"after it into the adapter above, so remove blank lines between entries")
+        elif line[0].isspace():
+            return (f"{path} has an indented line (line {num}): fastp would keep the leading "
+                    f"space inside the adapter, so start sequence lines with a base")
+        else:
+            seq.append(line.rstrip())
+    if header is not None:
+        entries.append((header, "".join(seq)))
+    if not entries:
+        return f"{path} contains no FASTA entries"
+    headers = [h for h, _ in entries]
+    dups = sorted({h for h in headers if headers.count(h) > 1})
+    if dups:
+        return (f"{path} repeats the header(s) {', '.join(dups)} - fastp keeps only "
+                f"one sequence per header, so give each adapter its own name")
+    for h, s in entries:
+        bad = sorted(set(s.upper()) - set("ACGTN"))
+        if bad:
+            return f"{path}: adapter '{h}' contains {''.join(bad)!r} (only A, C, G, T, N)"
+        if len(s) < 6:
+            return (f"{path}: adapter '{h}' is {len(s)} bp - fastp skips adapters under "
+                    f"6 bp, so remove it or give its full sequence")
+    return None
+
+
+def parse_adapters_pe(value):
+    """
+    'illumina' resolves to mode 'fasta' with GEP2's own adapter file. Raises
+    ValueError with a message meant for the user.
+    """
+    accepted = "Use illumina, auto, overlap, or the path to an adapter FASTA file."
+    if value is None:
+        raise ValueError(f"has no value. {accepted}")
+    if isinstance(value, bool):
+        # YAML turns an unquoted on/off/yes/no into True/False.
+        raise ValueError(f"{'on' if value else 'off'} is not a choice here. {accepted}")
+    raw = str(value).strip()
+    key = raw.lower()
+    if key == "illumina":
+        fasta = ILLUMINA_PE_ADAPTERS_FA
+    elif key in _ADAPTERS_PE_KEYWORDS:
+        return key, None
+    elif "/" in raw or key.endswith(_FASTA_EXTS) or key.endswith(tuple(e + ".gz" for e in _FASTA_EXTS)):
+        fasta = os.path.abspath(os.path.expanduser(raw))
+        if os.path.isdir(fasta):
+            raise ValueError(f"{fasta} is a folder, not an adapter FASTA file")
+        if not os.path.isfile(fasta):
+            raise ValueError(f"adapter FASTA not found: {fasta}")
+    else:
+        raise ValueError(f"{raw!r} is not recognised. {accepted}")
+    problem = _adapter_fasta_problem(fasta)
+    if problem:
+        raise ValueError(problem)
+    return "fasta", fasta
+
+
+# Checked once at load, so a typo stops the run before anything is scheduled
+# (missing key -> the 'illumina' default)
+try:
+    ADAPTERS_PE_MODE, ADAPTERS_PE_FASTA = parse_adapters_pe(config.get("ADAPTERS_PE", "illumina"))
+except ValueError as e:
+    sys.stderr.write(f"\n[GEP2] ERROR: ADAPTERS_PE in the control panel: {e}\n\n")
+    sys.exit(1)
+
+
 if IS_MAIN:
     print(f"[GEP2] DB_FOLDER: {DB_FOLDER}")
     print(f"[GEP2] BUSCO_DB_DIR: {BUSCO_DB_DIR}")
@@ -401,6 +487,12 @@ if IS_MAIN:
     print(f"[GEP2] DIAMOND_DB_TYPE: {DIAMOND_DB_TYPE}")
     print(f"[GEP2] DIAMOND_DB_DIR: {DIAMOND_DB_DIR}")
     print(f"[GEP2] DIAMOND_DB_PATH: {DIAMOND_DB_PATH}")
+    _adapters_pe_value = config.get("ADAPTERS_PE", "illumina")
+    print(f"[GEP2] ADAPTERS_PE: {_adapters_pe_value}"
+          + (f" ({ADAPTERS_PE_FASTA})" if ADAPTERS_PE_MODE == "fasta" else ""))
+    if ADAPTERS_PE_MODE == "fasta" and ADAPTERS_PE_FASTA != ILLUMINA_PE_ADAPTERS_FA:
+        print(f"[GEP2]   fastp reads this file inside the container: its folder must be "
+              f"covered by apptainer-args binds")
 
 # -------------------------------------------------------------------------------
 # TEMP DIRECTORY LOGIC
@@ -442,8 +534,8 @@ def _parse_fast_paths_from_profiles():
     Appends /tmp to each path for organization.
     """
     profile_paths = [
-        BASEDIR.parent / "execution" / "slurm" / "config.yaml",
-        BASEDIR.parent / "execution" / "local" / "config.yaml",
+        BASEDIR.parent / "execution" / "slurm" / "profile.yaml",
+        BASEDIR.parent / "execution" / "local" / "profile.yaml",
     ]
 
     # Priority order: localscratch first, then local, then home
@@ -504,8 +596,8 @@ def _check_apptainer_binds():
         return
 
     profiles = {
-        "slurm": BASEDIR.parent / "execution" / "slurm" / "config.yaml",
-        "local": BASEDIR.parent / "execution" / "local" / "config.yaml",
+        "slurm": BASEDIR.parent / "execution" / "slurm" / "profile.yaml",
+        "local": BASEDIR.parent / "execution" / "local" / "profile.yaml",
     }
 
     print("[GEP2]")
@@ -1063,16 +1155,9 @@ def _split_entry(path_value):
 
 
 def _read_stem(name, strip_mate=False):
-    """Filename stem with centralization prefix and extension removed.
-
-    With strip_mate=True the trailing mate marker is removed as well. This is the
-    single implementation of those rules: centralize_reads() uses it to build the
-    shared base of a pair, and the pairing check uses it on R1 and R2 separately
-    to confirm they are actually mates.
-
-    Single-end names deliberately keep a trailing _1/_2, which for long reads is
-    part of the library name rather than a mate marker.
-    """
+    """Filename stem without the centralization prefix and extension; strip_mate=True
+    also drops the mate marker (pairs only: for long reads a trailing _1/_2 is part of
+    the name). Shared by centralize_reads() and the pairing check."""
     name = os.path.basename(str(name))
     name = re.sub(r'^(hifi|ont|illumina|10x|hic|paired)_Path\d+_', '', name, flags=re.IGNORECASE)
     for ext in ['.fq.gz', '.fastq.gz', '.fq', '.fastq', '.gz']:
@@ -1955,12 +2040,40 @@ def get_read_processing_results():
 
                     expected_files.append(os.path.join(
                         config["OUT_FOLDER"], "GEP2_results", "data", species,
-                        "reads", read_type_normalized, "processed", "reports",
+                        "reads", read_type_normalized, "reports",
                         "multiqc_report.html"
                     ))
 
                     if IS_MAIN:
                         _debug_print(f"[GEP2] Read processing for {species}/{read_type_normalized}")
+
+    return expected_files
+
+
+# COLLECTORS - Read Base Counts
+# -------------------------------------------------------------------------------
+
+def get_read_bases_results():
+    """Per species and read technology: the table of read bases per file plus the total.
+    Requested whatever READS_PROC says: with processing off the raw reads are counted.
+    Helpers in B_proc_reads.smk."""
+    expected_files = []
+
+    if not samples_config or "sp_name" not in samples_config:
+        return expected_files
+
+    for species, species_data in samples_config["sp_name"].items():
+        if not species_data or "asm_id" not in species_data:
+            continue
+
+        read_types = []
+        for asm_id in species_data["asm_id"]:
+            for read_type in _effective_read_entries_for_assembly(species, asm_id):
+                if read_type not in read_types:
+                    read_types.append(read_type)
+
+        for read_type in read_types:
+            expected_files.append(_read_bases_summary_file(species, read_type))
 
     return expected_files
 
@@ -2343,8 +2456,11 @@ def get_hic_analysis_results():
 
                 results.extend([
                     os.path.join(hic_dir, f"{asm_basename}.mcool"),
-                    os.path.join(hic_dir, f"{asm_basename}.pairtools_stats.txt")
+                    os.path.join(hic_dir, f"{asm_basename}.pairtools_dedup_stats.txt")
                 ])
+
+            # Per-library check on 1M/10M-pair subsets (E14/E15, mapped to asm1)
+            results.extend(get_hic_library_qc_stats(species, asm_id))
 
     return results
 
@@ -2541,6 +2657,9 @@ def get_all_expected_outputs():
         if IS_MAIN:
             print("[GEP2] READS_PROC is off - skipping read processing")
 
+    # Read base counts per file and per technology (always; raw reads if READS_PROC is off)
+    expected_files.extend(get_read_bases_results())
+
     # K-mer analysis (if enabled)
     kmer_stats = _as_bool(config.get("KMER_STATS", True))
     if kmer_stats:
@@ -2614,6 +2733,7 @@ include: "rules/C_kmer_analysis.smk"
 include: "rules/D_longread_analysis.smk"
 include: "rules/E_hic_analysis.smk"
 include: "rules/F_cont_analysis.smk"
+include: "rules/G_read_screen.smk"
 include: "rules/Z_reporting.smk"
 
 

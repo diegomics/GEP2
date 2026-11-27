@@ -8,8 +8,8 @@
 ## For google drive and such, set anyone with the link as viewer
 DATA_TABLE: "https://docs.google.com/spreadsheets/d/1xmsstJGBo45SEQgCPncE76u51_VN5IDG9sFFafYkGfI/edit?usp=sharing"
 
-# Path where a folder named GEP2_results will be created
-OUT_FOLDER: "/srv/public/users/ddepanis/results"
+# Path where a folder named "GEP2_results" will be created
+OUT_FOLDER: "/srv/public/users/ddepanis/Assemblies"
 
 # Per job max resources
 myCPU: 24      # Maximum cores per job (2-24)
@@ -19,17 +19,17 @@ myRUN: 240     # Maximum time per job in HOURS
 
 # General purpose temp directory for intermediate files
 ## Options: "default" (uses OUT_FOLDER/GEP2_results/tmp), "auto" (will try to get a local SSD
-## from execution/config apptainer-args, falls back to default if not enough space free), or
+## from execution profile.yaml apptainer-args, falls back to default if not enough space free), or
 ## specify a path "/path/to/dir" to use that particular folder
 TEMP_DIR: "auto"
 
-# Fast temp directory for I/O-intensive operations (e.g., contamination screening)
+# Fast temp directory for I/O-intensive operations (crucial for contamination screening!)
 ## Options: "default" (uses OUT_FOLDER/GEP2_results/tmp and shows hints for RAM-based options),
 ## or specify a fast path like "/dev/shm" or another RAM-mounted filesystem
 FAST_TEMP_DIR: "/dev/shm"
 
 
-# Shared database folder for BUSCO, FCS-GX, uniptot, etc.
+# Shared database folder for BUSCO, FCS-GX, uniprot, kraken.
 # Options: "auto" (creates a 'databases' folder inside the GEP2 base folder), or specify a path
 # "/path/to/dir" to use that particular folder to put all the folders
 ## Databases are downloaded once and reused across runs (caution: they take disk space!!!)
@@ -59,17 +59,27 @@ PREFER_BUSCO: off
 
 # Read processing ---------------------------------------------------------------------------------
 
-# Process reads (trim/QC). Set to off to skip read processing
+# Process reads master switch. Set to off to skip all read processing
 READS_PROC: on
 
 # Trim short reads (Illumina/10x), set to off to skip trimming
 TRIM_PE: on
 
-# Filter HiFi reads, set to off to skip filtering
+# Extra adapter search for short PE reads | "illumina" (default) / "auto" / "overlap" / "/path.fa"
+## illumina: only TruSeq + Nextera | auto: guess from reads (may mistake repeats for adapters,
+## warns in the log) | overlap: no extra search, only trim read-overlap adapter | path: your FASTA
+ADAPTERS_PE: illumina
+
+# Filter HiFi reads, set to off to skip filtering SMRTbell adapter-containing reads
 FILTER_HIFI: on
 
 # Correct ONT reads with Hifiasm, set to off to skip correction (caution, may take hours)
 CORRECT_ONT: off
+
+# Run Kraken2 for read contamination screening (shown in the MultiQC report)
+## Uses the core_nt DB and a 50k-read subset per read set. Caution: The DB takes ~340 GB on disk
+## and about the same in RAM during the run! (also needs ~600 GB in disk during build)
+RUN_KRAKEN: off
 
 
 # K-mer analysis ----------------------------------------------------------------------------------
@@ -128,7 +138,7 @@ HIC_HIGH_RES: off
 
 # Resolution for the PretextSnapshot PNG
 ## Options are HD (default, 720), FHD (1080), 2K (2560), or 4K (3840)
-### Caution: higher resolutions equals to much larger files!
+### Caution: higher resolutions equals to much larger files!!!
 SNAP_RES: HD
 
 # Pretext tracks (requires RUN_HIC: on)
@@ -144,14 +154,14 @@ REP_TRACK: on
 TELO_TRACK: auto
 
 
-# Contamination analysis --------------------------------------------------------------------------
+# Assembly contamination analysis --------------------------------------------------------------------------
 
-# Contamination screening with NCBI FCS-GX (requires 512 GB RAM!)
+# Contamination screening with NCBI FCS-GX (requires ~500 GB RAM!)
 RUN_FCS: on
 # Skip FCS-GX for assemblies flagged with skip=on in data table
 SKIP_FCS: off
 
-# Contamination screening with BlobTools
+# Contamination screening with BlobTools-Diamond
 RUN_BLOB: on
 # Skip BlobTools for assemblies flagged with skip=on in data table
 SKIP_BLOB: off
@@ -165,4 +175,4 @@ DIAMOND_MODE: quick
 
 
 # ERGA Assembly Report yaml template --------------------------------------------------------------
-EAR_YAML: off   # generate an ERGA EAR YAML template per assembly id (experimental)
+EAR_YAML: off   # generate an ERGA EAR YAML filled template per assembly id

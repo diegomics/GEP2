@@ -21,10 +21,10 @@ rule A00_download_compleasm_db:
     params:
         db_dir = BUSCO_DB_DIR,
         odb    = ODB_VERSION
-    threads: cpu_func("download_db")
+    threads: cpu_func("download_data")
     resources:
-        mem_mb = mem_func("download_db"),
-        runtime = time_func("download_db")
+        mem_mb = mem_func("download_data"),
+        runtime = time_func("download_data")
     container: CONTAINERS["compleasm"]
     log:
         os.path.join(BUSCO_DB_DIR, "download_compleasm_db.log")
@@ -51,10 +51,10 @@ rule A00_download_busco_db:
     params:
         db_dir = BUSCO_DOWNLOAD_DIR,
         odb    = ODB_VERSION
-    threads: cpu_func("download_db")
+    threads: cpu_func("download_data")
     resources:
-        mem_mb = mem_func("download_db"),
-        runtime = time_func("download_db")
+        mem_mb = mem_func("download_data"),
+        runtime = time_func("download_data")
     container: CONTAINERS["busco"]
     log:
         os.path.join(BUSCO_DOWNLOAD_DIR, "download_busco_db.log")

@@ -4,7 +4,7 @@ FROM debian:trixie-slim
 # build-time only (ARG does not persist into the running container)
 ARG DEBIAN_FRONTEND=noninteractive
 ARG MICROMAMBA_VERSION=2.9.0-0
-ARG IMAGE_VERSION=0.2.1
+ARG IMAGE_VERSION=0.2.2
 
 LABEL org.opencontainers.image.title="hic_analysis" \
       org.opencontainers.image.version="${IMAGE_VERSION}" \

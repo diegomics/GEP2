@@ -1,0 +1,12 @@
+# MultiQC settings added for paired-end read types only (B08: Illumina, 10x, Hi-C)
+
+# General Statistics: FastQC's per-mate rows (<name>_1 / <name>_2) shown under their
+# pair (<name>, the name fastp and Kraken2 use). Not for long reads, where a name
+# ending in _1 is not a mate.
+table_sample_merge:
+  "R1":
+    - type: regex
+      pattern: "_1$"
+  "R2":
+    - type: regex
+      pattern: "_2$"

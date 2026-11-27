@@ -282,10 +282,10 @@ rule F00_download_fcs_gx_db:
         sif     = os.path.join(FCS_GX_DIR, "fcs-gx.sif"),
         fcs_py  = os.path.join(FCS_GX_DIR, "fcs.py"),
         manifest_url = "https://ncbi-fcs-gx.s3.amazonaws.com/gxdb/latest/all.manifest"
-    threads: cpu_func("samtools_index")
+    threads: cpu_func("download_data")
     resources:
-        mem_mb = mem_func("samtools_index"),
-        runtime = time_func("samtools_index")
+        mem_mb = mem_func("download_data"),
+        runtime = time_func("download_data")
     log:
         os.path.join(FCS_GX_DIR, "download_fcs_gx_db.log")
     benchmark:
